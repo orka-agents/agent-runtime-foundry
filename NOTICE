@@ -1,0 +1,7 @@
+This repository implements the Microsoft Foundry Hosted Agents Responses adapter for Orka.
+
+Its Orka harness server structure is derived from the classic adapter in
+https://github.com/orka-agents/agent-runtime-foundry-classic, which was extracted
+from https://github.com/orka-agents/orka under the MIT License. The Foundry-facing
+lifecycle in this repository is a new implementation of the Hosted Agents
+Responses and Sessions APIs.
