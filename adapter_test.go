@@ -182,6 +182,86 @@ func TestAdapterBrokeredFunctionCallContinuation(t *testing.T) {
 	}
 }
 
+func TestAdapterProviderStaticBrokeredFunctionCallContinuation(t *testing.T) {
+	backend := &fakeResponsesBackend{responses: []scriptedResponse{
+		{
+			validate: func(request foundryResponseRequest) error {
+				if len(request.Tools) != 0 {
+					return errors.New("provider-static mode forwarded request tool schemas")
+				}
+				return nil
+			},
+			run: func(_ context.Context, callbacks responseCallbacks) (foundryStreamSummary, error) {
+				if err := callbacks.OnCreated(foundryResponse{ID: "resp-static", Status: "in_progress", AgentSessionID: "session-static"}); err != nil {
+					return foundryStreamSummary{}, err
+				}
+				call := foundryOutputItem{Type: "function_call", CallID: "call-static", Name: "lookup_ticket", Arguments: json.RawMessage(`{"ticket":"INC-1"}`)}
+				if err := callbacks.OnFunctionCall(call); err != nil {
+					return foundryStreamSummary{}, err
+				}
+				return foundryStreamSummary{ResponseID: "resp-static", AgentSessionID: "session-static", Status: "completed", FunctionCalls: []foundryOutputItem{call}}, nil
+			},
+		},
+		{
+			validate: func(request foundryResponseRequest) error {
+				if request.PreviousResponseID != "resp-static" || request.AgentSessionID != "session-static" {
+					return errors.New("provider-static continuation identifiers missing")
+				}
+				if len(request.Tools) != 0 {
+					return errors.New("provider-static continuation forwarded request tool schemas")
+				}
+				outputs, ok := request.Input.([]foundryFunctionOutput)
+				if !ok || len(outputs) != 1 || outputs[0].CallID != "call-static" || outputs[0].Type != "function_call_output" {
+					return errors.New("provider-static function_call_output missing")
+				}
+				return nil
+			},
+			run: textResponseScript("resp-static-final", "session-static", "ticket is open").run,
+		},
+	}}
+	cfg := testConfig("http://127.0.0.1")
+	cfg.toolSchemaMode = toolSchemaModeProviderStatic
+	adapter := newAdapter(cfg, backend)
+	request := startRequest("provider-static", "provider-static-session")
+	request.ToolExecutionMode = harness.ToolExecutionModeBrokered
+	request.Input.Tools = []harness.ToolDefinition{{
+		Name:          "lookup_ticket",
+		Description:   "Look up a ticket",
+		BrokeredClass: harness.BrokeredToolClassRead,
+		Parameters:    json.RawMessage(`{"type":"object","properties":{"ticket":{"type":"string"}},"required":["ticket"]}`),
+	}}
+	turn, _, err := adapter.startTurn(request)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitForFrame(t, adapter, turn, harness.FrameToolCallRequested)
+	continueRequest := harness.ContinueTurnRequest{
+		Version:          harness.ProtocolVersion,
+		Namespace:        request.Namespace,
+		TaskName:         request.TaskName,
+		SessionName:      request.SessionName,
+		RuntimeSessionID: request.RuntimeSessionID,
+		TurnID:           request.TurnID,
+		CorrelationID:    request.CorrelationID,
+		ToolResults: []harness.ToolCallResult{{
+			Version:          harness.ProtocolVersion,
+			RuntimeSessionID: request.RuntimeSessionID,
+			TurnID:           request.TurnID,
+			ToolCallID:       orkaToolCallID(request.RuntimeSessionID, request.TurnID, "call-static"),
+			IdempotencyKey:   harness.ToolRequestIdempotencyKey(request.RuntimeSessionID, request.TurnID, orkaToolCallID(request.RuntimeSessionID, request.TurnID, "call-static")),
+			Approved:         true,
+			Output:           json.RawMessage(`{"status":"open"}`),
+		}},
+	}
+	if err := adapter.continueTurn(continueRequest); err != nil {
+		t.Fatalf("continue: %v", err)
+	}
+	waitTurnDone(t, turn)
+	if got := completedResult(turn.frames); got != "ticket is open" {
+		t.Fatalf("result = %q", got)
+	}
+}
+
 func TestAdapterVersionPinCreatesSessionOnce(t *testing.T) {
 	backend := &fakeResponsesBackend{createSessionID: "pinned-session", responses: []scriptedResponse{
 		{

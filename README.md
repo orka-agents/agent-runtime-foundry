@@ -33,13 +33,17 @@ must implement the Foundry Hosted Agent Responses contract (`POST /responses`
 and `GET /readiness`). The adapter invokes the deployed agent through the
 project endpoint; it is not the Hosted Agent container itself.
 
-The Hosted Agent must honor function tools supplied on each Responses request
-for Orka brokered-tool mode. Brokered profiles are disabled by default; enable
-only the classes the deployed agent has passed in conformance. If the agent
-ignores request-provided function tools, keep observed mode or update the agent
-implementation. Do not move Orka
-production tool credentials into Foundry Toolbox or MCP merely to make a probe
-pass; that changes the governance boundary.
+For Orka brokered-tool mode, use one of two schema delivery modes. The default
+`request` mode requires the Hosted Agent endpoint to accept function tools on
+each Responses request. `provider-static` mode is available for Hosted Agent
+endpoints that reject request-level tools; in that mode the Hosted Agent must
+preconfigure the function schemas. The adapter still rejects any function call
+that was not supplied in the current Orka turn, and Orka still owns argument
+validation, policy, approvals, credentials, execution, and audit. Brokered
+profiles are disabled by default; enable only the classes and schema mode the
+deployed agent has passed in conformance. Do not move Orka production tool
+credentials into Foundry Toolbox or MCP merely to make a probe pass; that
+changes the governance boundary.
 
 ## Configuration
 
@@ -56,7 +60,8 @@ pass; that changes the governance boundary.
 | `ORKA_FOUNDRY_TURN_TIMEOUT` | Absolute adapter maximum for one Orka turn, default `20s`. |
 | `ORKA_FOUNDRY_ISOLATION_MODE` | `entra` (default) or `header`. In `header` mode, the adapter sends an opaque hash of Orka's runtime session ID as `x-ms-user-isolation-key`. |
 | `ORKA_FOUNDRY_FEATURES` | Preview feature header value, default `HostedAgents=V1Preview`. Set an empty value only when the deployed API no longer requires the header. |
-| `ORKA_FOUNDRY_BROKERED_TOOL_CLASSES` | Optional comma-separated classes to advertise and accept: `read`, `write`, or `read,write`. Empty by default (observed-only). Enable only after the Hosted Agent passes the matching conformance probes with request-provided function tools. |
+| `ORKA_FOUNDRY_BROKERED_TOOL_CLASSES` | Optional comma-separated classes to advertise and accept: `read`, `write`, or `read,write`. Empty by default (observed-only). Enable only after the Hosted Agent passes the matching conformance probes in the configured schema mode. |
+| `ORKA_FOUNDRY_TOOL_SCHEMA_MODE` | Brokered schema delivery: `request` (default) sends Orka's safe function schemas on each Responses request; `provider-static` omits request-level tools and requires matching schemas to be preconfigured in the Hosted Agent. |
 
 The adapter authenticates with Azure SDK `DefaultAzureCredential` and requests
 the `https://ai.azure.com/.default` scope. In Kubernetes, use Azure Workload
@@ -108,7 +113,8 @@ spec:
   `store: true`.
 - `response.created` becomes `TurnStarted`.
 - `response.output_text.delta` becomes `RuntimeOutput`.
-- When explicitly enabled, request-provided safe Orka tool schemas become Responses function tools.
+- When explicitly enabled in `request` mode, request-provided safe Orka tool schemas become Responses function tools.
+- In `provider-static` mode, the provider uses its preconfigured schemas while the adapter enforces every returned function name against the current turn's Orka-supplied allowlist.
 - `function_call` output items become `ToolCallRequested` frames.
 - `/v1/turns/{turnID}/continue` sends `function_call_output` items with the same
   `call_id` and chains them with `previous_response_id`.
