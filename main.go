@@ -3,10 +3,29 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 	"time"
 )
 
 func main() {
+	if handled, err := maybeServeHosted(os.Args[1:]); handled {
+		if err != nil {
+			log.Fatal("Foundry hosted lifetime unavailable; inspect the ownership ledger before replacement")
+		}
+		return
+	}
+	if handled, err := maybeServeBroker(os.Args[1:]); handled {
+		if err != nil {
+			log.Fatal("Foundry lifecycle broker failed")
+		}
+		return
+	}
+	if handled, err := maybeServeACP(os.Args[1:], os.Stdin, os.Stdout); handled {
+		if err != nil {
+			log.Fatal("Foundry ACP bridge failed")
+		}
+		return
+	}
 	cfg := loadConfig()
 	if err := cfg.validate(); err != nil {
 		log.Fatal(err)

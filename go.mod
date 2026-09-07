@@ -3,9 +3,12 @@ module github.com/orka-agents/agent-runtime-foundry
 go 1.26.5
 
 require (
+	filippo.io/edwards25519 v1.2.0
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.22.0
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.0
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.3
+	golang.org/x/net v0.55.0
 )
 
 require (
@@ -15,7 +18,6 @@ require (
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	golang.org/x/crypto v0.51.0 // indirect
-	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 )

@@ -1,9 +1,14 @@
 # Microsoft Foundry Hosted Agents adapter for Orka
 
-This repository presents a deployed **Microsoft Foundry Hosted Agent** that
-implements the Responses protocol as an
+This repository connects a deployed **Microsoft Foundry Hosted Agent** to Orka.
+For harness v2, use the [ACP child and durable Foundry broker](docs/harness-v2.md)
+with Orka's existing supervisor. The default HTTP entry point exposes the
+Responses agent as an
 [`orka.harness.v1`](https://github.com/orka-agents/orka/blob/main/website/docs/development/agent-runtime-adapter-contract.md)
 `AgentRuntime` endpoint.
+
+To run the supervisor and ACP child inside Foundry itself, use the
+[Hosted Agent v2 package and Kubernetes gateway](docs/foundry-hosted-v2.md).
 
 The adapter calls the Hosted Agent's dedicated Responses endpoint:
 
@@ -21,7 +26,7 @@ are never sent to Foundry.
 
 ## Status
 
-The adapter is experimental. Run a single replica. Runtime-session and active
+The adapter is experimental. Run a single replica. In harness v1, runtime-session and active
 turn state are currently process-local, so a pod replacement cannot resume a
 retained session or deduplicate an active turn. Orka facade samples use an external endpoint and do
 not install or manage this adapter.
@@ -31,7 +36,8 @@ not install or manage this adapter.
 Deploy a Hosted Agent that exposes the Responses protocol. The agent container
 must implement the Foundry Hosted Agent Responses contract (`POST /responses`
 and `GET /readiness`). The adapter invokes the deployed agent through the
-project endpoint; it is not the Hosted Agent container itself.
+project endpoint. The default adapter runs outside Foundry; the optional
+v2 hosted package runs its supervisor inside a separate Hosted Agent.
 
 For Orka brokered-tool mode, use one of two schema delivery modes. The default
 `request` mode requires the Hosted Agent endpoint to accept function tools on
