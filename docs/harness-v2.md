@@ -197,22 +197,27 @@ lease cleanup, repeated controls, remote stop/delete proof, and ambiguous
 acceptance. Live validation additionally requires the exact configured
 Hosted Agent version and Azure identity.
 
-For a local test against an AgentKit source checkout, install its common package
-in a Python environment and run the opt-in integration test:
+For local tests against an AgentKit source checkout, install its common package
+in a Python environment and run the opt-in integration tests:
 
 ```sh
 export AGENTKIT_SOURCE_DIR=/path/to/agentkit
 uv venv /tmp/foundry-agentkit-venv
 export AGENTKIT_PYTHON=/tmp/foundry-agentkit-venv/bin/python
 uv pip install --python "$AGENTKIT_PYTHON" -e "$AGENTKIT_SOURCE_DIR/runtimes/common"
-go test ./internal/broker -run TestBrokerAgentKitHostedIntegration -count=1 -v
+go test ./internal/broker -run TestBrokerAgentKitHosted -count=1 -v
 ```
 
 This runs the production hosted AgentKit server and model loop, the Foundry ACP
 entrypoint over pipes, and the lifecycle broker. It checks two sequential tools,
 tool-error recovery, authorization denial, response identity changes, and proof
 isolation. A gateway that strips the proof is also tested to verify that no model
-resume occurs. The model, MCP backend, supervisor context stamping, and Azure
+resume occurs. Cancellation cases hold the model connection open, wait for an
+early hosted response acknowledgement, and verify that disconnect and lease
+expiry close the model connection and allow proven retirement. A gateway that
+loses the acknowledgement must leave the broker's ownership unresolved.
+
+The model, MCP backend, supervisor context stamping, and Azure
 session-management API are local fixtures. It requires no Azure or model credentials
 and does not validate a deployed Orka controller or the public Foundry gateway.
-The test is skipped when `AGENTKIT_SOURCE_DIR` is unset.
+These tests are skipped when `AGENTKIT_SOURCE_DIR` is unset.
