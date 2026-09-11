@@ -166,6 +166,28 @@ make build
 docker build -t ghcr.io/orka-agents/agent-runtime-foundry:latest .
 ```
 
+## Code layout
+
+The binary entry point is in `cmd/agent-runtime-foundry`. The default mode serves
+harness v1 HTTP. Use `--protocol` to select `acp`, `broker`, `hosted`, or
+`hosted-gateway`.
+
+| Directory | Responsibility |
+| --- | --- |
+| `internal/adapter` | Harness v1 HTTP server, turn lifecycle, and Responses client. |
+| `internal/acp` | ACP child process, prompt execution, and loopback MCP client. |
+| `internal/broker` | Durable Foundry session ownership and response settlement. |
+| `internal/hosted` | Hosted supervisor, Kubernetes gateway, and relay transport. |
+| `internal/foundry` | Shared agent configuration, Azure authentication, Responses parsing, and validation. |
+| `internal/brokerapi` | Broker routes shared with the hosted gateway. |
+| `internal/strictjson` | Duplicate-field and Unicode validation for JSON envelopes. |
+| `internal/durablestore` | Private files, lock ownership, and directory durability. |
+| `internal/harness`, `internal/events`, `internal/redact` | Harness contract and redaction helpers. |
+| `conformance` | Harness v1 conformance probes. |
+
+Tests live beside the implementation they exercise. The broker and hosted store
+tests share initialization checks in `internal/durablestore/storetest`.
+
 ## Orka facade
 
 Deploy this adapter and its Kubernetes `Service` separately, then point an Orka

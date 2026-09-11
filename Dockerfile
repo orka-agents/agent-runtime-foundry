@@ -4,7 +4,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN mkdir -p /out && CGO_ENABLED=0 GOOS=linux go build -o /out/agent-runtime-foundry .
+RUN mkdir -p /out && CGO_ENABLED=0 GOOS=linux go build -o /out/agent-runtime-foundry ./cmd/agent-runtime-foundry
 
 FROM gcr.io/distroless/static:nonroot
 COPY --from=build /out/agent-runtime-foundry /agent-runtime-foundry

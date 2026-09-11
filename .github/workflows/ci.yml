@@ -25,4 +25,4 @@ jobs:
       - name: Test
         run: go test ./...
       - name: Build
-        run: go build -o /tmp/agent-runtime-foundry .
+        run: go build -o /tmp/agent-runtime-foundry ./cmd/agent-runtime-foundry

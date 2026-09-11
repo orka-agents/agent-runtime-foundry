@@ -11,7 +11,7 @@ test:
 
 build:
 	mkdir -p bin
-	go build -o bin/agent-runtime-foundry .
+	go build -o bin/agent-runtime-foundry ./cmd/agent-runtime-foundry
 
 verify: vet test build
 	@test -z "$$(gofmt -l .)"
