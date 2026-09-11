@@ -26,8 +26,12 @@ func TestBrokerAgentKitHostedCancellation(t *testing.T) {
 	if source == "" {
 		t.Skip("set AGENTKIT_SOURCE_DIR and AGENTKIT_PYTHON to test an AgentKit checkout")
 	}
-	for _, mode := range []string{"disconnect", "lease_expiry", "acknowledgement_lost"} {
+	for _, mode := range []string{"disconnect", "lease_expiry", "acknowledgement_lost", "native_disconnect"} {
 		t.Run(mode, func(t *testing.T) {
+			native := mode == "native_disconnect"
+			if native && os.Getenv("AGENTKIT_MAF_PYTHON") == "" {
+				t.Skip("set AGENTKIT_MAF_PYTHON to test the native Microsoft Agent Framework runtime")
+			}
 			modelStarted, modelCancelled := make(chan struct{}), make(chan struct{})
 			var models, inferences atomic.Int32
 			model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -50,7 +54,7 @@ func TestBrokerAgentKitHostedCancellation(t *testing.T) {
 				close(modelCancelled)
 			}))
 			t.Cleanup(model.Close)
-			hostedURL, stateFile := brokerStartAgentKit(t, source, model.URL)
+			hostedURL, stateFile := brokerStartAgentKit(t, source, model.URL, native)
 			f := newBrokerFixture(t, "success")
 			cfg := brokerTestConfig(t, f)
 			cfg.agentKitProof = brokerAgentKitFixtureProof

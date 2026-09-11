@@ -217,6 +217,19 @@ early hosted response acknowledgement, and verify that disconnect and lease
 expiry close the model connection and allow proven retirement. A gateway that
 loses the acknowledgement must leave the broker's ownership unresolved.
 
+To include the native Microsoft Agent Framework path without brokered tools,
+install its adapter and select that Python environment as well:
+
+```sh
+uv pip install --python "$AGENTKIT_PYTHON" -e "$AGENTKIT_SOURCE_DIR/runtimes/microsoft-agent-framework"
+export AGENTKIT_MAF_PYTHON="$AGENTKIT_PYTHON"
+go test ./internal/broker -run TestBrokerAgentKitHostedCancellation/native_disconnect -count=1 -v
+```
+
+This case uses the real MAF runtime against a held model connection and verifies
+that cancellation closes that connection after the broker records the early
+response ID. It is skipped when `AGENTKIT_MAF_PYTHON` is unset.
+
 The model, MCP backend, supervisor context stamping, and Azure
 session-management API are local fixtures. It requires no Azure or model credentials
 and does not validate a deployed Orka controller or the public Foundry gateway.

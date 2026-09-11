@@ -86,7 +86,7 @@ func TestBrokerAgentKitHostedIntegration(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": message}}})
 			}))
 			t.Cleanup(model.Close)
-			hostedURL, stateFile := brokerStartAgentKit(t, source, model.URL)
+			hostedURL, stateFile := brokerStartAgentKit(t, source, model.URL, false)
 			f := newBrokerFixture(t, "success")
 			cfg := brokerTestConfig(t, f)
 			cfg.agentKitProof = brokerAgentKitFixtureProof
@@ -252,13 +252,16 @@ func TestBrokerAgentKitHostedIntegration(t *testing.T) {
 	}
 }
 
-func brokerStartAgentKit(t *testing.T, source, modelURL string) (string, string) {
+func brokerStartAgentKit(t *testing.T, source, modelURL string, native bool) (string, string) {
 	t.Helper()
 	source, err := filepath.Abs(source)
 	if err != nil {
 		t.Fatal("invalid AgentKit checkout path")
 	}
 	python := os.Getenv("AGENTKIT_PYTHON")
+	if native {
+		python = os.Getenv("AGENTKIT_MAF_PYTHON")
+	}
 	if python == "" {
 		python = "python3"
 	}
@@ -269,9 +272,14 @@ func brokerStartAgentKit(t *testing.T, source, modelURL string) (string, string)
 		tools = append(tools, map[string]any{"name": name, "description": "Read operational data.", "brokeredClass": "read",
 			"parameters": map[string]any{"type": "object", "properties": map[string]any{"id": map[string]any{"type": "string"}, "part": map[string]any{"type": "string"}}}})
 	}
-	body, _ := json.Marshal(map[string]any{"abiVersion": "v0", "metadata": map[string]string{"name": "foundry-integration"},
+	spec := map[string]any{"abiVersion": "v0", "metadata": map[string]string{"name": "foundry-integration"},
 		"model":        map[string]string{"provider": "openai-compatible", "baseURL": modelURL + "/v1", "name": "fixture-model"},
-		"instructions": "Use the operational tools in sequence.", "tools": []any{}, "brokeredTools": tools, "expose": map[string]any{"openai": true, "port": 8088}})
+		"instructions": "Use the operational tools in sequence.", "tools": []any{}, "brokeredTools": tools, "expose": map[string]any{"openai": true, "port": 8088}}
+	if native {
+		delete(spec, "brokeredTools")
+		spec["instructions"] = "Respond to the requested text task."
+	}
+	body, _ := json.Marshal(spec)
 	if os.WriteFile(config, body, 0600) != nil {
 		t.Fatal("could not write local AgentKit configuration")
 	}
@@ -283,10 +291,22 @@ func brokerStartAgentKit(t *testing.T, source, modelURL string) (string, string)
 	_, port, _ := net.SplitHostPort(address)
 	_ = listener.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	command := exec.CommandContext(ctx, python, "-m", "agentkit_serve_common.foundry_brokered_cli", "--config", config,
-		"--host", "127.0.0.1", "--port", port)
+	arguments := []string{"-m", "agentkit_serve_common.foundry_brokered_cli", "--config", config,
+		"--host", "127.0.0.1", "--port", port}
+	pythonPaths := []string{filepath.Join(source, "runtimes", "common")}
+	if native {
+		arguments = []string{"-c", `import sys, uvicorn
+from agentkit_serve_common.config import load
+from agentkit_serve_common.foundry import create_foundry_app
+from agentkit_serve import agent_factory
+app = create_foundry_app(load(sys.argv[1]), agent_factory)
+uvicorn.run(app, host="127.0.0.1", port=int(sys.argv[2]))
+`, config, port}
+		pythonPaths = append(pythonPaths, filepath.Join(source, "runtimes", "microsoft-agent-framework"))
+	}
+	command := exec.CommandContext(ctx, python, arguments...)
 	// No inherited model/Azure credentials, and no proof in the command line.
-	command.Env = []string{"PATH=" + os.Getenv("PATH"), "PYTHONPATH=" + filepath.Join(source, "runtimes", "common"),
+	command.Env = []string{"PATH=" + os.Getenv("PATH"), "PYTHONPATH=" + strings.Join(pythonPaths, string(os.PathListSeparator)),
 		"PYTHONDONTWRITEBYTECODE=1", "AGENTKIT_FOUNDRY_BROKERED_MODEL_LOOP=1", "AGENTKIT_FOUNDRY_RESPONSE_STATE_FILE=" + stateFile,
 		"AGENTKIT_FOUNDRY_BROKERED_CONTINUATION_PROOF=" + brokerAgentKitFixtureProof}
 	var logs bytes.Buffer
