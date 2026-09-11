@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -42,6 +43,7 @@ type lifecycleBroker struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
+	diagnosticLog *slog.Logger
 }
 
 func newLifecycleBroker(ctx context.Context, cfg brokerConfiguration, provider foundry.TokenProvider, client *http.Client) (*lifecycleBroker, error) {

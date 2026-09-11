@@ -195,7 +195,7 @@ func brokerTranslatePrevious(session *brokerSession, c brokerContext, first bool
 	return nil
 }
 
-func (b *lifecycleBroker) invoke(ctx context.Context, c brokerContext, request foundry.ResponseRequest) (foundry.Response, error) {
+func (b *lifecycleBroker) invoke(ctx context.Context, c brokerContext, request foundry.ResponseRequest) (_ foundry.Response, resultErr error) {
 	key, promptKey := foundry.JSONDigest(c.Owner), c.promptKey()
 	b.mu.Lock()
 	session := b.ledger.Sessions[key]
@@ -296,12 +296,20 @@ func (b *lifecycleBroker) invoke(ctx context.Context, c brokerContext, request f
 	if err != nil {
 		return foundry.Response{}, err
 	}
+	diagnostic := brokerResponseDiagnostic{stage: "transport"}
+	defer func() {
+		if resultErr != nil {
+			b.logResponseFailure(c, diagnostic)
+		}
+	}()
 	response, err := b.sendRemoteRequest(prepared)
 	if err != nil {
 		return foundry.Response{}, err
 	}
 	defer response.Body.Close() //nolint:errcheck
+	diagnostic.httpStatus = response.StatusCode
 	if response.StatusCode != http.StatusOK {
+		diagnostic.stage = "http_response"
 		count, readErr := io.Copy(io.Discard, io.LimitReader(response.Body, foundry.MaxAgentConfigBytes+1))
 		if readErr != nil || count > foundry.MaxAgentConfigBytes || !foundry.DefiniteRejection(response.StatusCode) {
 			return foundry.Response{}, errBrokerAmbiguous
@@ -319,6 +327,7 @@ func (b *lifecycleBroker) invoke(ctx context.Context, c brokerContext, request f
 		}
 		return foundry.Response{}, errBrokerRemote
 	}
+	diagnostic.stage = "content_type"
 	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil {
 		return foundry.Response{}, errBrokerAmbiguous
@@ -327,25 +336,36 @@ func (b *lifecycleBroker) invoke(ctx context.Context, c brokerContext, request f
 	switch mediaType {
 	case "text/event-stream":
 		var data []byte
-		data, err = b.readTrackedStream(response.Body, c, remoteID)
+		diagnostic.stage = "stream_read"
+		data, err = b.readTrackedStream(response.Body, c, remoteID, &diagnostic)
 		if err == nil {
+			diagnostic.stage = "strict_decode"
+			diagnostic.streamComplete = true
 			summary, err = foundry.ParseStrictSSE(bytes.NewReader(data))
 		}
 	case "application/json":
 		var data []byte
+		diagnostic.stage = "response_read"
 		data, err = io.ReadAll(io.LimitReader(response.Body, foundry.DefaultMaxStreamBytes+1))
 		if err == nil && len(data) <= foundry.DefaultMaxStreamBytes {
 			var document foundry.Response
+			diagnostic.stage = "response_decode"
 			document, err = brokerDecodeResponseEvidence(data)
 			if err == nil {
+				diagnostic.stage = "response_identity"
 				err = b.recordResponseIdentity(c, document, remoteID)
+				if err == nil {
+					diagnostic.observe(data, document)
+				}
 			}
 			if err == nil && document.Status == "completed" {
+				diagnostic.stage = "strict_decode"
 				document, err = foundry.DecodeResponse(data)
 				if err == nil {
 					summary, err = foundry.CompleteResponse(document, foundry.ResponseCallbacks{})
 				}
 			} else if err == nil {
+				diagnostic.stage = "response_terminal"
 				err = errBrokerRemote
 			}
 		} else {
@@ -357,6 +377,7 @@ func (b *lifecycleBroker) invoke(ctx context.Context, c brokerContext, request f
 	if err != nil || foundry.ValidateSummary(summary) != nil {
 		return foundry.Response{}, errBrokerAmbiguous
 	}
+	diagnostic.stage = "completion_storage"
 	return b.commitCompletedResponse(c, summary)
 }
 
@@ -396,7 +417,7 @@ func brokerDecodeResponseEvidence(data []byte) (foundry.Response, error) {
 	return response, nil
 }
 
-func (b *lifecycleBroker) readTrackedStream(reader io.Reader, c brokerContext, remoteID string) ([]byte, error) {
+func (b *lifecycleBroker) readTrackedStream(reader io.Reader, c brokerContext, remoteID string, diagnostic *brokerResponseDiagnostic) ([]byte, error) {
 	limited := &io.LimitedReader{R: reader, N: foundry.DefaultMaxStreamBytes + 1}
 	scanner := bufio.NewScanner(limited)
 	scanner.Buffer(make([]byte, 32<<10), foundry.DefaultMaxEventBytes)
@@ -432,7 +453,11 @@ func (b *lifecycleBroker) readTrackedStream(reader io.Reader, c brokerContext, r
 		default:
 			return errBrokerRemote
 		}
-		return b.recordResponseIdentity(c, response, remoteID)
+		if err := b.recordResponseIdentity(c, response, remoteID); err != nil {
+			return err
+		}
+		diagnostic.observe(frame.Response, response)
+		return nil
 	}
 	for scanner.Scan() {
 		line := scanner.Bytes()

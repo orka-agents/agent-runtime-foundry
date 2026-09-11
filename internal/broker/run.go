@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -63,6 +64,7 @@ func MaybeServe(args []string) (bool, error) {
 		return true, err
 	}
 	defer broker.close()
+	broker.diagnosticLog = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	server := &http.Server{Addr: cfg.addr, Handler: broker, ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 32 << 10}
 	finished := make(chan error, 1)

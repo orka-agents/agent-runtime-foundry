@@ -183,6 +183,16 @@ remote execution can survive the local container. Preserve unresolved
 ownership records for investigation; do not fabricate retirement receipts
 or remove finalizers to bypass them.
 
+The broker writes one bounded JSON diagnostic to stderr when a dispatched
+response fails. It records the failure stage, outer HTTP status, invocation
+sequence, hashed owner, and whether a response acknowledgement was persisted.
+An observed terminal frame adds its status and an allowlisted AgentKit error
+code. The optional `error.upstream_status` is recorded only as an integer from
+400 through 599. Unknown error codes become `unknown`; provider messages,
+response bodies, URLs, remote IDs, headers, and credentials are excluded.
+These diagnostics leave ownership and cleanup decisions to the existing
+durable evidence and settlement checks.
+
 An authenticated drain can replace a surviving supervisor after a controller
 epoch change. After a supervisor crash, Orka cannot import the broker's
 old-owner proof through the current harness contract. That recovery remains
