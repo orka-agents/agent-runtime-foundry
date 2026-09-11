@@ -57,6 +57,20 @@ func TestDefaultFoundryFeaturesHonorsExplicitEmptyValue(t *testing.T) {
 	}
 }
 
+func TestToolSchemaModeConfiguration(t *testing.T) {
+	t.Setenv(envToolSchemaMode, toolSchemaModeProviderStatic)
+	if got := loadConfig().toolSchemaMode; got != toolSchemaModeProviderStatic {
+		t.Fatalf("tool schema mode = %q, want %q", got, toolSchemaModeProviderStatic)
+	}
+
+	cfg := testConfig("https://account.services.ai.azure.com")
+	cfg.projectEndpoint = "https://account.services.ai.azure.com/api/projects/demo"
+	cfg.toolSchemaMode = "unsupported"
+	if err := cfg.validate(); err == nil {
+		t.Fatal("unsupported tool schema mode was accepted")
+	}
+}
+
 func TestConfigRejectsCrossOriginOrWrongAgentResponsesEndpoint(t *testing.T) {
 	base := testConfig("https://account.services.ai.azure.com")
 	base.adapterBearer = "adapter-token"

@@ -50,6 +50,12 @@ const (
 	envIsolationMode       = "ORKA_FOUNDRY_ISOLATION_MODE"
 	envFoundryFeatures     = "ORKA_FOUNDRY_FEATURES"
 	envBrokeredToolClasses = "ORKA_FOUNDRY_BROKERED_TOOL_CLASSES"
+	envToolSchemaMode      = "ORKA_FOUNDRY_TOOL_SCHEMA_MODE"
+)
+
+const (
+	toolSchemaModeRequest        = "request"
+	toolSchemaModeProviderStatic = "provider-static"
 )
 
 const foundryEndpointRequirement = "Foundry endpoint must use https " +
@@ -82,6 +88,7 @@ type config struct {
 	maxConcurrent            int
 	brokeredToolClasses      []harness.BrokeredToolClass
 	brokeredToolClassSetting string
+	toolSchemaMode           string
 }
 
 func loadConfig() config {
@@ -112,6 +119,7 @@ func loadConfig() config {
 		maxConcurrent:            defaultMaxTurns,
 		brokeredToolClasses:      brokeredToolClasses,
 		brokeredToolClassSetting: brokeredToolClassSetting,
+		toolSchemaMode:           strings.ToLower(firstNonBlank(os.Getenv(envToolSchemaMode), toolSchemaModeRequest)),
 	}
 }
 
@@ -190,6 +198,11 @@ func (c config) validate() error {
 		if value != harness.BrokeredToolClassRead && value != harness.BrokeredToolClassWrite {
 			return fmt.Errorf("unsupported Foundry brokered tool class %q", value)
 		}
+	}
+	switch strings.ToLower(strings.TrimSpace(c.toolSchemaMode)) {
+	case "", toolSchemaModeRequest, toolSchemaModeProviderStatic:
+	default:
+		return fmt.Errorf("foundry tool schema mode must be %s or %s", toolSchemaModeRequest, toolSchemaModeProviderStatic)
 	}
 	switch strings.ToLower(strings.TrimSpace(c.isolationMode)) {
 	case "entra", "header":

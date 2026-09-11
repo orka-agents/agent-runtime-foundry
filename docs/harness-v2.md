@@ -1,0 +1,150 @@
+# Orka harness v2
+
+The v2 adapter is an ACP child of Orka's existing supervisor. A separate
+Foundry broker owns Azure identity, remote session creation, and durable
+cleanup records. The ACP child has no Azure credentials.
+
+Use one Pod with a supervisor container and a broker sidecar, one replica,
+and the Recreate strategy. The broker listens on `127.0.0.1:8091`. Its state
+directory must be on a persistent volume that survives either container or
+Pod replacement. Mount that volume only in the broker. Never share the
+broker's Azure identity or durable state with the ACP child.
+
+## Build and register
+
+Create a nonsecret JSON configuration using
+[`examples/foundry-acp.json`](../examples/foundry-acp.json). Pin a concrete
+Hosted Agent version. Both processes verify the SHA-256 of the exact file
+bytes. The target project, agent, version, model, and schema mode therefore
+belong to the registered runtime profile. Per-Task configuration overrides
+are rejected.
+
+Build the configured Foundry source image:
+
+```sh
+docker buildx build --platform linux/amd64 -f Dockerfile.acp \
+  --build-arg FOUNDRY_CONFIG=examples/foundry-acp.json \
+  -t <registry>/foundry-configured:<tag> --push .
+```
+
+In the Orka checkout, compose the supervisor with that image:
+
+```sh
+make docker-build-acp-foundry-runtime \
+  FOUNDRY_RUNTIME_IMAGE=<registry>/foundry-configured@sha256:<digest> \
+  FOUNDRY_ADAPTER_DIGEST=sha256:<same-digest> \
+  ACP_FOUNDRY_RUNTIME_IMG=<registry>/foundry-runtime:<tag>
+```
+
+Register the composed image's service as an external `orka.harness.v2`
+AgentRuntime. Set `providerKind: foundry`, `adapterName: foundry-serve-acp`,
+and `adapterDigest` to the configured Foundry source image digest. The
+`agentConfigurationDigest` is `sha256:` plus the SHA-256 of `/agent/foundry.json`.
+Set `supportsAgentSessionConfiguration: false`. Follow Orka's external v2
+registration contract for the remaining profile, operation authentication,
+controller epoch, workspace, and MCP settings.
+
+The child accepts text prompts and resource links represented as text. It
+uses the supervisor's HTTP MCP server for tools. It does not support image,
+audio, embedded-resource, permission, terminal, filesystem, or session-load
+ACP requests. Keep approval-required tools empty. The Task must use the
+runtime profile's exact brokered tool allowlist.
+
+The hosted agent's static function names must exactly match those MCP tools.
+Use Orka's built-in names or the names of its Kubernetes Tool resources. The
+child rejects unknown function names before calling a tool.
+Tool results sent to Foundry contain only validated text content,
+`structuredContent`, and `isError`. MCP metadata and unrecognized extension
+fields are not forwarded.
+
+## Process configuration
+
+The supervisor starts the child as:
+
+```text
+/agent-runtime-foundry --protocol acp --config /agent/foundry.json
+```
+
+Orka supplies these child-only values:
+
+| Variable | Value |
+| --- | --- |
+| `ORKA_FOUNDRY_ACP_PROVIDER_BASE_URL` | Per-session supervisor loopback proxy. |
+| `ORKA_FOUNDRY_ACP_PROVIDER_TOKEN` | Ephemeral local proxy credential. |
+| `ORKA_FOUNDRY_ACP_MODEL` | Model in the baked JSON. |
+| `ORKA_FOUNDRY_ACP_AGENT_CONFIGURATION_DIGEST` | Exact baked-file SHA-256. |
+
+Run the configured source image as the broker sidecar with arguments
+`--protocol broker --config /agent/foundry.json`. Give it the same model and
+configuration digest, plus:
+
+| Variable | Value |
+| --- | --- |
+| `ORKA_FOUNDRY_BROKER_ADDR` | `127.0.0.1:8091`. |
+| `ORKA_FOUNDRY_BROKER_STATE_DIR` | Absolute path on the broker-only persistent volume. |
+| `ORKA_FOUNDRY_BROKER_BEARER_TOKEN` | At least 32 bytes, from a Kubernetes Secret. |
+
+Only the broker receives Azure Workload Identity or another refreshable
+`DefaultAzureCredential` configuration. The initial implementation requires
+Entra isolation. The supervisor's `ORKA_ACP_PROVIDER_PROXY_BASE_URL` points to
+`http://127.0.0.1:8091/v1`; its provider token file contains the broker bearer.
+Neither the broker bearer nor Azure identity enters the child environment.
+
+For a Kubernetes exec readiness probe, run:
+
+```text
+/agent-runtime-foundry --protocol broker --health-check
+```
+
+This checks the configured loopback `/healthz` without loading Azure identity
+or opening the ledger. Set the state directory to a private subdirectory of
+the persistent volume, such as `/broker-state/ledger`, that the broker user
+can create with mode `0700`.
+
+The broker's persistent directory is private to its OS user. Its ledger
+contains remote identifiers and ownership metadata, never prompts, tool
+arguments, provider response bodies, Azure tokens, or local bearer tokens.
+Do not delete or replace this ledger while it owns remote work.
+
+## Lifecycle guarantees and limits
+
+The broker persists a random caller-chosen remote session ID before sending
+create. Every inference request binds the exact Orka runtime fence, Task,
+attempt, prompt digest, lease, invocation sequence, and request-body digest.
+It never repeats an inference request after ambiguous acceptance. Remote
+response IDs are represented to the child by owner-scoped opaque aliases.
+
+Successful continuation retains only the last successful response alias.
+Failed or cancelled prompts do not become successful conversation history.
+`request` mode sends the discovered function schemas to Foundry. The configured
+Hosted Agent version's Responses endpoint must accept top-level function tools;
+container readiness and SDK support do not prove that Foundry ingress accepts
+them. If that endpoint rejects request-level `tools`, use `provider-static` and
+preconfigure matching schemas in the Hosted Agent. This mode omits request-level
+schemas while retaining the current MCP allowlist.
+
+Prompt completion and cancellation require remote settlement proof. Session
+deletion also requires remote retirement proof. A closed HTTP connection,
+local process death, or a single `404` is insufficient when a create or
+inference request has an unresolved acceptance outcome. Those cases remain
+blocked and Orka reports `OutcomeUnknown` without replaying the prompt.
+
+Lease expiry and broker startup trigger cleanup of exactly owned sessions.
+Kubernetes container-termination recovery does not apply to Foundry because
+remote execution can survive the local container. Preserve unresolved
+ownership records for investigation; do not fabricate retirement receipts
+or remove finalizers to bypass them.
+
+An authenticated drain can replace a surviving supervisor after a controller
+epoch change. After a supervisor crash, Orka cannot import the broker's
+old-owner proof through the current harness contract. That recovery remains
+blocked even if the broker later contains the remote work.
+
+## Verification
+
+Run `make verify`. The ACP tests cover real stdio pipes, loopback provider and
+MCP servers, continuation, cancellation, malformed Responses streams,
+tool allowlists, and blocked output. Broker tests cover durable ownership,
+lease cleanup, repeated controls, remote stop/delete proof, and ambiguous
+acceptance. Live validation additionally requires the exact configured
+Hosted Agent version and Azure identity.

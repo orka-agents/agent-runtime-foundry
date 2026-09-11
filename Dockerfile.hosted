@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1
+# Build the configured ACP image, compose it with Orka's supervisor, then use
+# that immutable composition here. Only the public hosted configuration enters
+# this image. The gateway retains Azure identity and all bootstrap secrets.
+ARG ORKA_RUNTIME_IMAGE
+FROM ${ORKA_RUNTIME_IMAGE} AS runtime
+
+# This filesystem was exercised on Foundry Hosted Agents with the actual Orka
+# exec helper. A distroless filesystem did not start in that environment.
+FROM docker.io/library/python:3.12-slim@sha256:2fe5997d249a808b8eeea52c58a1dbffbba28754dc11699ef5c029f2d818ce79
+ARG ORKA_RUNTIME_IMAGE
+ARG FOUNDRY_ADAPTER_DIGEST
+ARG HOSTED_CONFIG
+RUN set -eu; \
+    case "$ORKA_RUNTIME_IMAGE" in *@sha256:*) ;; *) exit 1 ;; esac; \
+    digest="${ORKA_RUNTIME_IMAGE##*@sha256:}"; \
+    test "${#digest}" -eq 64; \
+    case "$digest" in *[!0-9a-f]*) exit 1 ;; esac; \
+    case "$FOUNDRY_ADAPTER_DIGEST" in sha256:*) ;; *) exit 1 ;; esac; \
+    digest="${FOUNDRY_ADAPTER_DIGEST#sha256:}"; \
+    test "${#digest}" -eq 64; \
+    case "$digest" in *[!0-9a-f]*) exit 1 ;; esac; \
+    mkdir -p /agent; chmod 0555 /agent
+COPY --from=runtime --chown=0:0 --chmod=0555 /agent-runtime-foundry /agent-runtime-foundry
+COPY --from=runtime --chown=0:0 --chmod=0555 /usr/local/bin/orka-acp-runtime /usr/local/bin/orka-acp-runtime
+COPY --from=runtime --chown=0:0 --chmod=0555 /usr/local/bin/orka-acp-exec-helper /usr/local/bin/orka-acp-exec-helper
+COPY --from=runtime --chown=0:0 --chmod=0444 /agent/foundry.json /agent/foundry.json
+COPY --chown=0:0 --chmod=0444 ${HOSTED_CONFIG} /agent/hosted.json
+ENV PORT=8088 ORKA_ACP_FOUNDRY_ADAPTER_DIGEST=${FOUNDRY_ADAPTER_DIGEST}
+LABEL org.opencontainers.image.title="Orka-governed Foundry Hosted Agent" \
+      org.opencontainers.image.source="https://github.com/orka-agents/agent-runtime-foundry" \
+      io.orka.harness.protocol="orka.harness.v2"
+WORKDIR /
+# Only the supervisor is privileged. It assigns distinct UIDs/GIDs to ACP children.
+USER 0:0
+EXPOSE 8088
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/agent-runtime-foundry"]
+CMD ["--protocol", "hosted", "--config", "/agent/hosted.json"]

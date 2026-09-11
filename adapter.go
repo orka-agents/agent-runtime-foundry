@@ -281,7 +281,7 @@ func (a *adapter) startTurn(request harness.StartTurnRequest) (*turnState, strin
 		Input:              request.Input.Prompt,
 		PreviousResponseID: turn.previousResponse,
 		AgentSessionID:     turn.agentSessionID,
-		Tools:              foundryToolSchemas(request),
+		Tools:              a.providerToolSchemas(request),
 	})
 	return turn, eventsPath, nil
 }
@@ -740,7 +740,7 @@ func (a *adapter) prepareContinuationLocked(turn *turnState) (foundryResponseReq
 		Input:              outputs,
 		PreviousResponseID: previousResponseID,
 		AgentSessionID:     turn.agentSessionID,
-		Tools:              foundryToolSchemas(turn.request),
+		Tools:              a.providerToolSchemas(turn.request),
 	}, nil
 }
 
@@ -1374,6 +1374,13 @@ func foundryToolSchemas(request harness.StartTurnRequest) []foundryToolSchema {
 		})
 	}
 	return tools
+}
+
+func (a *adapter) providerToolSchemas(request harness.StartTurnRequest) []foundryToolSchema {
+	if strings.EqualFold(strings.TrimSpace(a.cfg.toolSchemaMode), toolSchemaModeProviderStatic) {
+		return nil
+	}
+	return foundryToolSchemas(request)
 }
 
 func normalizeFoundryToolArguments(raw json.RawMessage) (json.RawMessage, error) {
