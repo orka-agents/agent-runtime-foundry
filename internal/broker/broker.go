@@ -45,7 +45,7 @@ type lifecycleBroker struct {
 }
 
 func newLifecycleBroker(ctx context.Context, cfg brokerConfiguration, provider foundry.TokenProvider, client *http.Client) (*lifecycleBroker, error) {
-	if provider == nil || len(cfg.bearer) < 32 || !foundry.DigestValid(cfg.configDigest) {
+	if provider == nil || len(cfg.bearer) < 32 || !foundry.DigestValid(cfg.configDigest) || !brokerAgentKitProofValid(cfg.agentKitProof) {
 		return nil, errBrokerInvalid
 	}
 	store, ledger, err := openBrokerStore(cfg.stateDir, cfg.configDigest)

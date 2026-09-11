@@ -23,6 +23,7 @@ type brokerConfiguration struct {
 	addr             string
 	stateDir         string
 	bearer           string
+	agentKitProof    string
 	operationTimeout time.Duration
 }
 
@@ -98,9 +99,11 @@ func loadBrokerConfiguration(path string, getenv func(string) string) (brokerCon
 	cfg := brokerConfiguration{agent: agent, configDigest: digest,
 		addr:     foundry.FirstNonBlank(getenv("ORKA_FOUNDRY_BROKER_ADDR"), "127.0.0.1:8091"),
 		stateDir: getenv("ORKA_FOUNDRY_BROKER_STATE_DIR"), bearer: getenv("ORKA_FOUNDRY_BROKER_BEARER_TOKEN"),
+		agentKitProof:    getenv(brokerAgentKitProofEnv),
 		operationTimeout: 45 * time.Second}
 	if !brokerAddressValid(cfg.addr) || cfg.stateDir == "" ||
 		!foundry.SafeString(cfg.bearer, 16<<10) || len(cfg.bearer) < 32 || strings.ContainsAny(cfg.bearer, " \t") ||
+		!brokerAgentKitProofValid(cfg.agentKitProof) ||
 		(getenv(foundry.IsolationModeEnv) != "" && getenv(foundry.IsolationModeEnv) != "entra") {
 		return brokerConfiguration{}, errBrokerInvalid
 	}

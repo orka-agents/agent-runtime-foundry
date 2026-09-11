@@ -83,6 +83,7 @@ configuration digest, plus:
 | `ORKA_FOUNDRY_BROKER_ADDR` | `127.0.0.1:8091`. |
 | `ORKA_FOUNDRY_BROKER_STATE_DIR` | Absolute path on the broker-only persistent volume. |
 | `ORKA_FOUNDRY_BROKER_BEARER_TOKEN` | At least 32 bytes, from a Kubernetes Secret. |
+| `ORKA_FOUNDRY_BROKER_AGENTKIT_CONTINUATION_PROOF` | Optional shared secret for an AgentKit Hosted Agent's governed tool results. See below. |
 
 Only the broker receives Azure Workload Identity or another refreshable
 `DefaultAzureCredential` configuration. The initial implementation requires
@@ -105,6 +106,53 @@ The broker's persistent directory is private to its OS user. Its ledger
 contains remote identifiers and ownership metadata, never prompts, tool
 arguments, provider response bodies, Azure tokens, or local bearer tokens.
 Do not delete or replace this ledger while it owns remote work.
+
+## AgentKit tool workflows
+
+Configure the hosted AgentKit agent with static `brokeredTools` and
+`AGENTKIT_FOUNDRY_BROKERED_MODEL_LOOP=1`. Use an AgentKit version that supports
+sequential tool rounds and set `toolSchemaMode` to `provider-static` in the
+Foundry configuration. The hosted agent and Orka runtime must use the same
+tool names. Each round proposes one tool; Orka executes it and the hosted agent
+receives its result before deciding whether to call another tool or answer.
+
+For an AgentKit Hosted Agent configured with brokered tools, give the broker
+`ORKA_FOUNDRY_BROKER_AGENTKIT_CONTINUATION_PROOF` and give the hosted AgentKit
+process `AGENTKIT_FOUNDRY_BROKERED_CONTINUATION_PROOF` with the same value. Use a
+secret of at least 32 bytes, without whitespace or control characters. Keep it
+in secret-backed environment variables for those two processes only. Never
+put it in `foundry.json`, an image, an Orka Task, the supervisor environment,
+or the ACP child environment. Use a separate secret for each deployment pair.
+
+When the agent requests a tool, the ACP child calls Orka's session MCP server.
+The broker validates the resulting request against its owner, prompt, lease,
+previous response and pending call IDs before returning the result to AgentKit.
+It then attaches the secret in the top-level `brokered_continuation_proof` JSON
+field. Ordinary prompts do not carry it. The broker rejects proof fields or
+proof headers supplied by its caller and never persists the secret in its
+ledger or returns it to the ACP child.
+
+AgentKit expects a result envelope with `approved` and either `output` or
+`error`. The broker converts Orka's validated MCP result to this format.
+An explicit `isError: false` becomes `approved: true` with the text and
+structured content preserved under `output`. `isError: true` becomes
+`approved: false` with a `brokered_tool_error` code and the validated error
+text. Malformed results and missing error flags are rejected. MCP authorization
+failures abort the tool call before any result is sent to AgentKit. The
+`approved` field is AgentKit's result format; it does not report human approval.
+Approval-required tools remain unsupported by this adapter.
+
+This is the existing AgentKit shared-secret contract. It authenticates the
+broker's continuation route; it is not a signed execution receipt. The broker's
+ownership checks and AgentKit's session, pending-call and replay checks remain
+required. The Foundry Responses gateway must preserve the body extension and
+deliver it to the hosted wrapper. Local contract tests do not establish that
+the deployed Foundry gateway forwards it; verify the configured agent version
+before enabling its tools in a live runtime.
+
+Leave the variable unset for other Hosted Agents. Their function output format
+and requests remain unchanged. AgentKit must also support repeated tool rounds
+for workflows that need several lookups before answering.
 
 ## Lifecycle guarantees and limits
 
@@ -148,3 +196,23 @@ tool allowlists, and blocked output. Broker tests cover durable ownership,
 lease cleanup, repeated controls, remote stop/delete proof, and ambiguous
 acceptance. Live validation additionally requires the exact configured
 Hosted Agent version and Azure identity.
+
+For a local test against an AgentKit source checkout, install its common package
+in a Python environment and run the opt-in integration test:
+
+```sh
+export AGENTKIT_SOURCE_DIR=/path/to/agentkit
+uv venv /tmp/foundry-agentkit-venv
+export AGENTKIT_PYTHON=/tmp/foundry-agentkit-venv/bin/python
+uv pip install --python "$AGENTKIT_PYTHON" -e "$AGENTKIT_SOURCE_DIR/runtimes/common"
+go test ./internal/broker -run TestBrokerAgentKitHostedIntegration -count=1 -v
+```
+
+This runs the production hosted AgentKit server and model loop, the Foundry ACP
+entrypoint over pipes, and the lifecycle broker. It checks two sequential tools,
+tool-error recovery, authorization denial, response identity changes, and proof
+isolation. A gateway that strips the proof is also tested to verify that no model
+resume occurs. The model, MCP backend, supervisor context stamping, and Azure
+session-management API are local fixtures. It requires no Azure or model credentials
+and does not validate a deployed Orka controller or the public Foundry gateway.
+The test is skipped when `AGENTKIT_SOURCE_DIR` is unset.

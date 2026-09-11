@@ -19,6 +19,12 @@ import (
 )
 
 func (b *lifecycleBroker) serveResponses(w http.ResponseWriter, r *http.Request, c brokerContext, raw []byte) {
+	for name := range r.Header {
+		if strings.EqualFold(name, brokerAgentKitProofHeader) {
+			brokerWriteError(w, errBrokerInvalid)
+			return
+		}
+	}
 	var request foundry.ModelResponseRequest
 	if strictjson.Decode(raw, &request, true) != nil || request.Model != b.cfg.agent.Model || !request.Stream || !request.Store || request.Input == nil {
 		brokerWriteError(w, errBrokerInvalid)
@@ -127,6 +133,11 @@ func (b *lifecycleBroker) reserveInvocation(c brokerContext, request *foundry.Mo
 		}
 		if err := brokerTranslatePrevious(session, c, prompt.LastSequence == 0, &request.ResponseRequest); err != nil {
 			return err
+		}
+		if b.cfg.agentKitProof != "" {
+			if err := brokerAgentKitOutputs(&request.ResponseRequest); err != nil {
+				return err
+			}
 		}
 		prompt.LastSequence = c.InvocationSequence
 		prompt.Invocations[c.InvocationSequence] = &brokerInvocation{Sequence: c.InvocationSequence, OperationID: c.OperationID,
@@ -263,7 +274,7 @@ func (b *lifecycleBroker) invoke(ctx context.Context, c brokerContext, request f
 		return foundry.Response{}, errBrokerRemote
 	}
 	request.AgentSessionID = remoteID
-	body, err := json.Marshal(request)
+	body, err := b.marshalResponseRequest(request)
 	if err != nil {
 		return foundry.Response{}, errBrokerInvalid
 	}

@@ -2,6 +2,7 @@ package acp
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -10,6 +11,27 @@ import (
 
 	"github.com/orka-agents/agent-runtime-foundry/internal/foundry"
 )
+
+func TestACPToolOutputRejectsConflictingFoldedErrorFlags(t *testing.T) {
+	for _, flags := range []string{`"isError":true,"ISERROR":false`, `"ISERROR":true,"isError":false`} {
+		t.Run(flags, func(t *testing.T) {
+			mcp := &acpTestMCP{tools: func() []map[string]any { return acpTestTools("probe") }}
+			mcp.execute = func(w http.ResponseWriter, _ *http.Request, id json.RawMessage, _ string, _ json.RawMessage) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"tool failed"}],%s}}`, id, flags)
+			}
+			var requests atomic.Int32
+			peer := newACPTestPeer(t, foundry.ToolSchemaModeProviderStatic, func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				acpTestCompleted(w, "tool-response", "", acpTestCall("probe", "call-probe", `{}`))
+			}, mcp)
+			acpAssertFailure(t, peer.reply(peer.prompt("use probe")))
+			if requests.Load() != 1 || mcp.calls.Load() != 1 || acpOutput(peer.events) != "" {
+				t.Fatal("contradictory MCP error flags were converted into a successful continuation")
+			}
+		})
+	}
+}
 
 func TestACPToolOutputForwardsOnlyValidatedModelContent(t *testing.T) {
 	for _, mode := range []string{"text", "structured", "error"} {

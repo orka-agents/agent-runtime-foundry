@@ -123,7 +123,7 @@ func (m *acpMCPClient) execute(ctx context.Context, name string, args json.RawMe
 		IsError           *bool           `json:"isError,omitempty"`
 		StructuredContent json.RawMessage `json:"structuredContent,omitempty"`
 	}
-	if strictjson.Decode(result, &reply, false) != nil || reply.Content == nil {
+	if strictjson.DecodeStruct(result, &reply, false) != nil || reply.Content == nil {
 		return "", false, errACPMCP
 	}
 	for _, content := range reply.Content {
