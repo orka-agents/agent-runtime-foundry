@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/orka-agents/agent-runtime-foundry/internal/foundry"
 	"github.com/orka-agents/agent-runtime-foundry/internal/strictjson"
@@ -62,7 +63,7 @@ func (m *acpMCPClient) initialize(ctx context.Context) error {
 		return errACPMCP
 	}
 	body, _ := json.Marshal(acpRequest{JSONRPC: "2.0", Method: "notifications/initialized"})
-	response, err := m.post(ctx, body)
+	response, err := m.post(ctx, body, acpHTTPTimeout)
 	if err != nil {
 		return err
 	}
@@ -150,7 +151,11 @@ func (m *acpMCPClient) call(ctx context.Context, method string, params any) (jso
 		return nil, errACPMCP
 	}
 	body, _ := json.Marshal(acpRequest{JSONRPC: "2.0", ID: id, Method: method, Params: encoded})
-	response, err := m.post(ctx, body)
+	timeout := acpHTTPTimeout
+	if method == "tools/call" {
+		timeout = acpToolCallTimeout
+	}
+	response, err := m.post(ctx, body, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +181,7 @@ func (m *acpMCPClient) call(ctx context.Context, method string, params any) (jso
 	return reply.Result, nil
 }
 
-func (m *acpMCPClient) post(ctx context.Context, body []byte) (*http.Response, error) {
+func (m *acpMCPClient) post(ctx context.Context, body []byte, timeout time.Duration) (*http.Response, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, m.url, bytes.NewReader(body))
 	if err != nil {
 		return nil, errACPMCP
@@ -185,7 +190,11 @@ func (m *acpMCPClient) post(ctx context.Context, body []byte) (*http.Response, e
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json, text/event-stream")
 	request.Header.Set("MCP-Protocol-Version", acpMCPVersion)
-	response, err := m.client.Do(request)
+	// A held approval is still this one request. Share the bounded loopback
+	// transport, but never lengthen a concurrent model or discovery request.
+	client := *m.client
+	client.Timeout = timeout
+	response, err := client.Do(request)
 	if err != nil {
 		return nil, errACPMCP
 	}

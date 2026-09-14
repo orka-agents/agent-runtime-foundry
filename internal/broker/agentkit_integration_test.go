@@ -34,9 +34,18 @@ func TestBrokerAgentKitHostedIntegration(t *testing.T) {
 	if source == "" {
 		t.Skip("set AGENTKIT_SOURCE_DIR and AGENTKIT_PYTHON to test an AgentKit checkout")
 	}
-	for _, mode := range []string{"success", "tool_error", "authorization_denied", "gateway_strips_proof"} {
+	for _, mode := range []string{"success", "tool_error", "authorization_denied", "gateway_strips_proof", "approval_approved", "approval_declined", "approval_expired", "approval_execution_failed"} {
 		t.Run(mode, func(t *testing.T) {
-			var models, calls, invocations atomic.Int32
+			var models, calls, invocations, executions atomic.Int32
+			pendingReview, decision, reviewChecked := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			heldApproval := strings.HasPrefix(mode, "approval_")
+			approvalCode := ""
+			switch mode {
+			case "approval_declined", "approval_expired":
+				approvalCode = mode
+			case "approval_execution_failed":
+				approvalCode = "tool_execution_failed"
+			}
 			model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
 				if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" ||
@@ -63,10 +72,14 @@ func TestBrokerAgentKitHostedIntegration(t *testing.T) {
 						Output   json.RawMessage `json:"output"`
 						Error    map[string]any  `json:"error"`
 					}
-					approved := mode != "tool_error" || n != 2
+					approved := n != 2 || (mode != "tool_error" && approvalCode == "")
+					code := "brokered_tool_error"
+					if n == 2 && approvalCode != "" {
+						code = approvalCode
+					}
 					if last["role"] != "tool" || json.Unmarshal([]byte(text), &result) != nil ||
 						result.Approved == nil || *result.Approved != approved ||
-						(!approved && (result.Output != nil || result.Error["code"] != "brokered_tool_error")) {
+						(!approved && (result.Output != nil || result.Error["code"] != code)) || strings.Contains(text, "private-review-") {
 						t.Error("real model resume lost the governed tool result or converted an error to approval")
 						w.WriteHeader(http.StatusBadRequest)
 						return
@@ -191,10 +204,25 @@ func TestBrokerAgentKitHostedIntegration(t *testing.T) {
 						w.WriteHeader(http.StatusBadRequest)
 						return
 					}
-					failed := mode == "tool_error" && n == 1
+					if n == 1 && heldApproval {
+						close(pendingReview)
+						select {
+						case <-decision:
+						case <-r.Context().Done():
+							return
+						}
+					}
+					if n != 1 || approvalCode == "" || approvalCode == "tool_execution_failed" {
+						executions.Add(1)
+					}
+					failed := n == 1 && (mode == "tool_error" || approvalCode != "")
 					structured := map[string]any{"part": "FBR-7", "quantity": 7}
 					if failed {
 						structured = map[string]any{"isError": true, "error": "MCP tool execution failed"}
+						if approvalCode != "" {
+							structured["code"] = approvalCode
+							structured["error"] = "private-review-note"
+						}
 					}
 					text, _ := json.Marshal(structured)
 					result = map[string]any{"content": []map[string]string{{"type": "text", "text": string(text)}},
@@ -221,6 +249,28 @@ func TestBrokerAgentKitHostedIntegration(t *testing.T) {
 			if result["sessionId"] == nil {
 				t.Fatal("real ACP session creation failed")
 			}
+			if heldApproval {
+				go func() {
+					defer close(reviewChecked)
+					select {
+					case <-pendingReview:
+					case <-t.Context().Done():
+						return
+					}
+					if models.Load() != 1 || calls.Load() != 1 || executions.Load() != 0 || invocations.Load() != 1 {
+						t.Error("held review executed a tool or continued the real hosted model")
+					}
+					b.mu.Lock()
+					owner := b.ledger.Sessions[foundry.JSONDigest(c.Owner)]
+					prompt := owner.Prompts[c.promptKey()]
+					owned := !prompt.Closing && prompt.LastSequence == 1 && len(owner.Responses[prompt.LastAlias].CallIDs) == 1
+					b.mu.Unlock()
+					if !owned {
+						t.Error("held review lost its durable original call ownership")
+					}
+					close(decision)
+				}()
+			}
 			terminal := peer.call("session/prompt", map[string]any{"sessionId": result["sessionId"],
 				"prompt": []any{map[string]string{"type": "text", "text": "Check the work order, then check inventory."}}})
 			blocked := mode == "authorization_denied" || mode == "gateway_strips_proof"
@@ -239,6 +289,16 @@ func TestBrokerAgentKitHostedIntegration(t *testing.T) {
 					t.Error("chained tool results reused a response identity")
 				}
 				remoteMu.Unlock()
+			}
+			if heldApproval {
+				<-reviewChecked
+				wantExecutions := int32(2)
+				if approvalCode == "approval_declined" || approvalCode == "approval_expired" {
+					wantExecutions = 1
+				}
+				if executions.Load() != wantExecutions {
+					t.Fatal("human decision did not control the counted execution")
+				}
 			}
 			_ = brokerTestControl(t, brokerServer.URL, brokerapi.SettlePath, c)
 			_ = brokerTestControl(t, brokerServer.URL, brokerapi.RetirePath, c)

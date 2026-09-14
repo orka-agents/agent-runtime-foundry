@@ -22,6 +22,9 @@ const (
 	acpMaxMessageBytes  = 8 << 20
 	acpTextChunkBytes   = 32 << 10
 	acpHTTPTimeout      = 120 * time.Second
+	// Orka permits 600s of review and 240s of approved execution. The remaining
+	// minute covers delivery; Task cancellation and lease loss can end it sooner.
+	acpToolCallTimeout = 900 * time.Second
 )
 
 var (
@@ -135,6 +138,7 @@ func newACPHTTPClient() *http.Client {
 			MaxIdleConnsPerHost: 2,
 			MaxConnsPerHost:     2,
 			IdleConnTimeout:     30 * time.Second,
+			TLSHandshakeTimeout: 10 * time.Second,
 		},
 	}
 }

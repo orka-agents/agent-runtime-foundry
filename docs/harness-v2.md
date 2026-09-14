@@ -47,8 +47,9 @@ controller epoch, workspace, and MCP settings.
 The child accepts text prompts and resource links represented as text. It
 uses the supervisor's HTTP MCP server for tools. It does not support image,
 audio, embedded-resource, permission, terminal, filesystem, or session-load
-ACP requests. Keep approval-required tools empty. The Task must use the
-runtime profile's exact brokered tool allowlist.
+ACP requests. Orka can require human approval for brokered tools as described
+below. This does not enable native ACP permission requests. The Task must use
+the runtime profile's exact brokered tool allowlist.
 
 The hosted agent's static function names must exactly match those MCP tools.
 Use Orka's built-in names or the names of its Kubernetes Tool resources. The
@@ -137,10 +138,11 @@ AgentKit expects a result envelope with `approved` and either `output` or
 An explicit `isError: false` becomes `approved: true` with the text and
 structured content preserved under `output`. `isError: true` becomes
 `approved: false` with a `brokered_tool_error` code and the validated error
-text. Malformed results and missing error flags are rejected. MCP authorization
-failures abort the tool call before any result is sent to AgentKit. The
-`approved` field is AgentKit's result format; it does not report human approval.
-Approval-required tools remain unsupported by this adapter.
+text. Orka's recognized structured approval and execution outcomes retain their
+specific code and use a fixed safe message. Malformed results and missing error
+flags are rejected. MCP authorization failures abort the tool call before any
+result is sent to AgentKit. The `approved` field is AgentKit's result format;
+it does not report human approval, and `false` is a final outcome.
 
 This is the existing AgentKit shared-secret contract. It authenticates the
 broker's continuation route; it is not a signed execution receipt. The broker's
@@ -153,6 +155,79 @@ before enabling its tools in a live runtime.
 Leave the variable unset for other Hosted Agents. Their function output format
 and requests remain unchanged. AgentKit must also support repeated tool rounds
 for workflows that need several lookups before answering.
+
+## Human approvals
+
+Use matched builds containing [Orka's brokered approval support](https://github.com/orka-agents/orka/issues/582),
+[this bridge's approval integration](https://github.com/orka-agents/agent-runtime-foundry/issues/4),
+and [AgentKit's approval compatibility](https://github.com/sozercan/agentkit/issues/26).
+Older bridges impose a two-minute tool limit. The Orka v2 runtime must advertise
+`supportsBrokeredToolApprovals: true` for the qualified provider combination;
+native `supportsPermissions` remains false. Validate the exact pinned Foundry
+agent version and gateway before enabling approval-required tools.
+
+Orka owns the review, authorized reviewers, saved decision, execution, and audit.
+Configure an automatic lookup and a harmless counted action requiring approval
+in Orka's tool policy. When the agent proposes the action, Orka's Task approval
+API and panel show the proposed operation and safe input preview. The action's
+execution count remains zero until an authorized reviewer approves it. Each later
+approval-required action needs its own decision, including another invocation
+of the same tool.
+
+The existing MCP `tools/call` request stays open while the review is pending.
+There is no interim result, polling model request, or resubmission of the prompt.
+An approved call returns its actual result to the original pending function call
+and previous response. Separate runtime sessions can progress during the wait.
+Each child still admits at most two concurrent MCP calls.
+
+| Operation | Maximum duration |
+| --- | --- |
+| Human review in Orka | 600 seconds |
+| Approved tool execution in Orka | 240 seconds |
+| One MCP `tools/call`, including review, execution, and delivery | 900 seconds |
+| Model requests and MCP discovery | 120 seconds |
+| Local connection and TLS handshake | 10 seconds each |
+| Broker provisioning or cleanup operation | 45 seconds |
+
+These are upper bounds. Task and session deadlines, cancellation, and loss of
+the live broker lease can end a wait sooner. The supervisor must continue
+renewing its lease while a tool waits; each lease grant remains limited to five
+minutes. A longer tool wait does not lengthen any model, discovery, or cleanup
+request. The bridge's 900-second limit is fixed in the qualified adapter build;
+there is no timeout environment variable to pass to the child.
+
+Configure both the pinned Foundry version's session idle timeout and AgentKit's
+pending-response TTL to at least 1,800 seconds for the full review window.
+Set `AGENTKIT_FOUNDRY_RESPONSE_STATE_TTL_SECONDS=1800` on the hosted AgentKit
+process. It exposes the configured TTL as `foundryResponses.stateTtlSeconds` on
+`/readiness`; use `AGENTKIT_FOUNDRY_RESPONSE_STATE_FILE` for its supported private,
+single-writer persistent storage. [Foundry sessions](https://learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions)
+default to a 900-second idle timeout and accept 120 through 3,600 seconds.
+Changing that setting requires a new agent version. Neither the default idle
+timeout nor a 900-second AgentKit TTL leaves enough margin for the maximum tool
+wait and model continuation. A suspended or lost hosted process must not cause
+the bridge to repeat an action whose outcome is unknown.
+
+Orka returns final errors with `isError: true` and an allowlisted
+`structuredContent.code`, also marked `isError: true`. The AgentKit continuation
+uses `approved: false` with that code and a fixed message:
+
+| Code | Meaning |
+| --- | --- |
+| `approval_declined` | The reviewer declined the action; it did not execute. |
+| `approval_expired` | The review expired before execution. |
+| `approval_cancelled` | The unstarted action was cancelled. |
+| `approval_stale` | The recorded decision no longer authorizes the proposed action. |
+| `tool_execution_failed` | An approved execution failed. |
+| `tool_outcome_unknown` | Execution may have happened; do not repeat the action. |
+
+The bridge never interprets tool text as an approval decision. Recognized codes
+discard raw error text and private metadata when converting to AgentKit's
+envelope. Other admitted tool errors keep the existing `brokered_tool_error`
+format. HTTP or JSON-RPC authorization errors remain fatal protocol errors.
+Cancellation and transport failures close the wait without a continuation;
+a late decision cannot reopen that ACP session. Broker restart closes the old
+prompt's authority while retaining its ownership evidence.
 
 ## Lifecycle guarantees and limits
 
@@ -221,7 +296,9 @@ go test ./internal/broker -run TestBrokerAgentKitHosted -count=1 -v
 This runs the production hosted AgentKit server and model loop, the Foundry ACP
 entrypoint over pipes, and the lifecycle broker. It checks two sequential tools,
 tool-error recovery, authorization denial, response identity changes, and proof
-isolation. A gateway that strips the proof is also tested to verify that no model
+isolation. Counted approval fixtures hold the first call, verify zero execution
+and no model continuation, then exercise approval, decline, expiry, and a tool
+failure after approval. A gateway that strips the proof is also tested to verify that no model
 resume occurs. Cancellation cases hold the model connection open, wait for an
 early hosted response acknowledgement, and verify that disconnect and lease
 expiry close the model connection and allow proven retirement. A gateway that
@@ -244,3 +321,18 @@ The model, MCP backend, supervisor context stamping, and Azure
 session-management API are local fixtures. It requires no Azure or model credentials
 and does not validate a deployed Orka controller or the public Foundry gateway.
 These tests are skipped when `AGENTKIT_SOURCE_DIR` is unset.
+
+The ordinary Go suite also exercises the full 900-second transport budget with
+virtual time, approval cancellation, independent sessions, distinct decisions
+for sequential calls, lost tool results, rolling leases, and broker restart.
+These tests use fixtures for the human decision and do not establish that the
+configured Foundry gateway supports a live review.
+
+For deployment acceptance, run Orka's real Task and approval APIs against the
+configured Foundry gateway with a disposable Task and a harmless counted tool.
+Record the visible pending approval with count zero, the saved decision, count
+one after approval, continuation of the original conversation, and cleanup.
+Repeat with a declined review and a cancelled Task; both must keep the unstarted
+action's count at zero, including after a late decision. Keep the record free of
+credentials and private review metadata. Passing the local fixtures does not
+complete this live check.
