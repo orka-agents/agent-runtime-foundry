@@ -131,7 +131,7 @@ func TestBrokerResponseIdentityWritesOncePerInvocation(t *testing.T) {
 			events[0] = testSSE(`{"type":"response.created","response":{"id":"response-1","status":"in_progress"}}`)
 			events[len(events)-1] = testSSE(`{"type":"response.completed","response":{"id":"response-1","status":"completed"}}`)
 			reader := &brokerIdentityEventReader{t: t, path: filepath.Join(b.store.dir, "state.json"), events: events}
-			data, err := b.readTrackedStream(reader, c, brokerIdentityRemoteSession)
+			data, err := b.readTrackedStream(reader, c, brokerIdentityRemoteSession, nil)
 			if err != nil {
 				t.Fatal("coherent acceptance evidence was rejected")
 			}
@@ -287,7 +287,7 @@ func TestBrokerResponseIdentityTrackingStillRejectsMalformedTail(t *testing.T) {
 	b, c := newBrokerResponseIdentityFixture(t)
 	created := testSSE(`{"type":"response.created","response":{"id":"response-1","status":"in_progress"}}`)
 	stream := created + testSSE(`{"type":"response.in_progress","response":{"id":"response-1","status":"completed"}}`)
-	if _, err := b.readTrackedStream(strings.NewReader(stream), c, brokerIdentityRemoteSession); err == nil {
+	if _, err := b.readTrackedStream(strings.NewReader(stream), c, brokerIdentityRemoteSession, nil); err == nil {
 		t.Fatal("duplicate response identity bypassed lifecycle validation")
 	}
 	invocation := b.ledger.Sessions[foundry.JSONDigest(c.Owner)].Prompts[c.promptKey()].Invocations[c.InvocationSequence]

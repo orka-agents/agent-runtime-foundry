@@ -9,6 +9,9 @@ Responses agent as an
 
 To run the supervisor and ACP child inside Foundry itself, use the
 [Hosted Agent v2 package and Kubernetes gateway](docs/foundry-hosted-v2.md).
+For AgentKit agents that use Orka tools, configure the
+[AgentKit continuation secret](docs/harness-v2.md#agentkit-tool-workflows) on the
+broker and hosted agent.
 
 The adapter calls the Hosted Agent's dedicated Responses endpoint:
 

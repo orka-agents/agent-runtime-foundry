@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -42,10 +43,11 @@ type lifecycleBroker struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
+	diagnosticLog *slog.Logger
 }
 
 func newLifecycleBroker(ctx context.Context, cfg brokerConfiguration, provider foundry.TokenProvider, client *http.Client) (*lifecycleBroker, error) {
-	if provider == nil || len(cfg.bearer) < 32 || !foundry.DigestValid(cfg.configDigest) {
+	if provider == nil || len(cfg.bearer) < 32 || !foundry.DigestValid(cfg.configDigest) || !brokerAgentKitProofValid(cfg.agentKitProof) {
 		return nil, errBrokerInvalid
 	}
 	store, ledger, err := openBrokerStore(cfg.stateDir, cfg.configDigest)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -23,6 +24,7 @@ type brokerConfiguration struct {
 	addr             string
 	stateDir         string
 	bearer           string
+	agentKitProof    string
 	operationTimeout time.Duration
 }
 
@@ -62,6 +64,7 @@ func MaybeServe(args []string) (bool, error) {
 		return true, err
 	}
 	defer broker.close()
+	broker.diagnosticLog = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	server := &http.Server{Addr: cfg.addr, Handler: broker, ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 32 << 10}
 	finished := make(chan error, 1)
@@ -98,9 +101,11 @@ func loadBrokerConfiguration(path string, getenv func(string) string) (brokerCon
 	cfg := brokerConfiguration{agent: agent, configDigest: digest,
 		addr:     foundry.FirstNonBlank(getenv("ORKA_FOUNDRY_BROKER_ADDR"), "127.0.0.1:8091"),
 		stateDir: getenv("ORKA_FOUNDRY_BROKER_STATE_DIR"), bearer: getenv("ORKA_FOUNDRY_BROKER_BEARER_TOKEN"),
+		agentKitProof:    getenv(brokerAgentKitProofEnv),
 		operationTimeout: 45 * time.Second}
 	if !brokerAddressValid(cfg.addr) || cfg.stateDir == "" ||
 		!foundry.SafeString(cfg.bearer, 16<<10) || len(cfg.bearer) < 32 || strings.ContainsAny(cfg.bearer, " \t") ||
+		!brokerAgentKitProofValid(cfg.agentKitProof) ||
 		(getenv(foundry.IsolationModeEnv) != "" && getenv(foundry.IsolationModeEnv) != "entra") {
 		return brokerConfiguration{}, errBrokerInvalid
 	}
