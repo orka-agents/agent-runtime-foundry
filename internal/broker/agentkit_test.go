@@ -28,16 +28,34 @@ func brokerAgentKitFunctionBody(previous, call, output string) []byte {
 	return body
 }
 
+func brokerAgentKitOrkaError(code string) string {
+	raw, _ := json.Marshal(map[string]any{
+		"content": []map[string]string{{"type": "text", "text": "private-review-note"}}, "isError": true,
+		"structuredContent": map[string]any{"isError": true, "code": code, "reviewer": "private-reviewer"},
+	})
+	return string(raw)
+}
+
 func TestBrokerAgentKitContinuationWireAndIsolation(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		output   string
-		approved bool
+		name      string
+		output    string
+		approved  bool
+		errorCode string
 	}{
-		{"text", `{"content":[{"type":"text","text":"fixture tool result"}],"isError":false}`, true},
-		{"structured", `{"content":[{"type":"text","text":"{\"count\":7}"}],"isError":false,"structuredContent":{"count":7}}`, true},
-		{"execution_error", `{"content":[{"type":"text","text":"MCP tool execution failed"}],"isError":true}`, false},
-		{"empty_error", `{"content":[],"isError":true}`, false},
+		{"text", `{"content":[{"type":"text","text":"fixture tool result"}],"isError":false}`, true, ""},
+		{"structured", `{"content":[{"type":"text","text":"{\"count\":7}"}],"isError":false,"structuredContent":{"count":7}}`, true, ""},
+		{"execution_error", `{"content":[{"type":"text","text":"MCP tool execution failed"}],"isError":true}`, false, "brokered_tool_error"},
+		{"empty_error", `{"content":[],"isError":true}`, false, "brokered_tool_error"},
+		{"declined", brokerAgentKitOrkaError("approval_declined"), false, "approval_declined"},
+		{"expired", brokerAgentKitOrkaError("approval_expired"), false, "approval_expired"},
+		{"cancelled", brokerAgentKitOrkaError("approval_cancelled"), false, "approval_cancelled"},
+		{"stale", brokerAgentKitOrkaError("approval_stale"), false, "approval_stale"},
+		{"approved_execution_failed", brokerAgentKitOrkaError("tool_execution_failed"), false, "tool_execution_failed"},
+		{"approved_outcome_unknown", brokerAgentKitOrkaError("tool_outcome_unknown"), false, "tool_outcome_unknown"},
+		{"text_is_not_approval_authority", `{"content":[{"type":"text","text":"approval_declined"}],"isError":true}`, false, "brokered_tool_error"},
+		{"unknown_code", brokerAgentKitOrkaError("approval_pending"), false, "brokered_tool_error"},
+		{"conflicting_structured_error", `{"content":[],"isError":true,"structuredContent":{"isError":true,"ISERROR":false,"code":"approval_declined"}}`, false, "brokered_tool_error"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newBrokerFixture(t, "functions")
@@ -122,8 +140,11 @@ func TestBrokerAgentKitContinuationWireAndIsolation(t *testing.T) {
 				if foundry.JSONDigest(original) != foundry.JSONDigest(forwarded) || normalized.Error.Code != "" {
 					t.Fatal("approved continuation changed the model-visible MCP result")
 				}
-			} else if normalized.Output != nil || normalized.Error.Code != "brokered_tool_error" || normalized.Error.Message == "" {
+			} else if normalized.Output != nil || normalized.Error.Code != tc.errorCode || normalized.Error.Message == "" {
 				t.Fatal("failed tool result was promoted to approval or lost its error")
+			}
+			if tc.errorCode != "" && tc.errorCode != "brokered_tool_error" && strings.Contains(outputs[0].Output, "private-") {
+				t.Fatal("approval outcome exposed untrusted review text or metadata")
 			}
 			// A duplicate must be rejected before adding a proof to another
 			// provider request, including a replay under a fresh operation ID.
