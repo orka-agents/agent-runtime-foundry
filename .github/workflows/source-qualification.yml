@@ -1,0 +1,80 @@
+name: Foundry 32cd33f5 source qualification
+
+on:
+  push:
+    branches: [validation/pr589-foundry-32cd33f5-20260922]
+
+permissions:
+  contents: read
+
+jobs:
+  exact-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FOUNDRY_REVISION: 32cd33f590f66a9c85a8474d3608471137cb9f0e
+      AGENTKIT_REVISION: 490bb6d6c968d0240f3034318e05f9561baf4334
+    steps:
+      - name: Check out exact Foundry source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: 32cd33f590f66a9c85a8474d3608471137cb9f0e
+          path: foundry
+          persist-credentials: false
+      - name: Check out exact AgentKit source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: sozercan/agentkit
+          ref: 490bb6d6c968d0240f3034318e05f9561baf4334
+          path: agentkit
+          persist-credentials: false
+      - name: Verify immutable source identities
+        run: |
+          test "$(git -C foundry rev-parse HEAD)" = "$FOUNDRY_REVISION"
+          test "$(git -C agentkit rev-parse HEAD)" = "$AGENTKIT_REVISION"
+          test -z "$(git -C foundry status --porcelain)"
+          test -z "$(git -C agentkit status --porcelain)"
+          {
+            echo "Tested Foundry source: $FOUNDRY_REVISION"
+            echo "Tested AgentKit source: $AGENTKIT_REVISION"
+            echo "Workflow revision: $GITHUB_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: foundry/go.mod
+          cache-dependency-path: foundry/go.sum
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Install pinned-source integration runtimes
+        run: |
+          python -m venv "$RUNNER_TEMP/agentkit"
+          "$RUNNER_TEMP/agentkit/bin/pip" install ./agentkit/runtimes/common ./agentkit/runtimes/microsoft-agent-framework
+          {
+            echo "AGENTKIT_SOURCE_DIR=$GITHUB_WORKSPACE/agentkit"
+            echo "AGENTKIT_PYTHON=$RUNNER_TEMP/agentkit/bin/python"
+            echo "AGENTKIT_MAF_PYTHON=$RUNNER_TEMP/agentkit/bin/python"
+          } >> "$GITHUB_ENV"
+      - name: Verify formatting
+        working-directory: foundry
+        run: test -z "$(gofmt -l .)"
+      - name: Vet
+        working-directory: foundry
+        run: go vet ./...
+      - name: Test including hosted and native integration
+        working-directory: foundry
+        run: go test -count=1 -v ./...
+      - name: Race checks including hosted and native integration
+        working-directory: foundry
+        run: go test -race -count=1 ./...
+      - name: Build
+        working-directory: foundry
+        run: go build -o "$RUNNER_TEMP/agent-runtime-foundry" ./cmd/agent-runtime-foundry
+      - name: Confirm tested source remained unchanged
+        run: |
+          test "$(git -C foundry rev-parse HEAD)" = "$FOUNDRY_REVISION"
+          test "$(git -C agentkit rev-parse HEAD)" = "$AGENTKIT_REVISION"
+          test -z "$(git -C foundry status --porcelain --untracked-files=no)"
+          test -z "$(git -C agentkit status --porcelain --untracked-files=no)"
