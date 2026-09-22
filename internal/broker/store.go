@@ -31,6 +31,10 @@ const brokerOwnerReserveBytes = 64 << 10
 
 const brokerPrincipalReserveBytes = 128
 
+// A seal retains the escaped pool-wide fence and an exact owner-set digest.
+// Reserve it even after ordinary owner retirement, until the boot is sealed.
+const brokerBootReserveBytes = 16 << 10
+
 var errBrokerCapacity = errors.New("Foundry broker durable state is at capacity")
 
 func brokerLedgerReserveBytes(ledger *brokerLedger) int {
@@ -43,14 +47,23 @@ func brokerLedgerReserveBytes(ledger *brokerLedger) int {
 			reserve += brokerOwnerReserveBytes
 		}
 	}
+	if ledger.LedgerIdentityDigest != "" {
+		for key := range brokerBootOwners(ledger) {
+			if ledger.SealedBoots[key] == nil {
+				reserve += brokerBootReserveBytes
+			}
+		}
+	}
 	return reserve
 }
 
 type brokerLedger struct {
-	Version         uint32                    `json:"version"`
-	ConfigDigest    string                    `json:"configDigest"`
-	PrincipalDigest string                    `json:"principalDigest,omitempty"`
-	Sessions        map[string]*brokerSession `json:"sessions"`
+	Version              uint32                     `json:"version"`
+	ConfigDigest         string                     `json:"configDigest"`
+	PrincipalDigest      string                     `json:"principalDigest,omitempty"`
+	LedgerIdentityDigest string                     `json:"ledgerIdentityDigest,omitempty"`
+	Sessions             map[string]*brokerSession  `json:"sessions"`
+	SealedBoots          map[string]*brokerBootSeal `json:"sealedBoots,omitempty"`
 }
 
 type brokerSession struct {
@@ -117,6 +130,7 @@ func openBrokerStore(dir, digest string) (*brokerStore, *brokerLedger, error) {
 			store.close()
 			return nil, nil, errBrokerStorage
 		}
+		ledger.LedgerIdentityDigest = foundry.Digest([]byte(uuid.NewString()))
 		if err := store.save(ledger); err != nil {
 			store.close()
 			return nil, nil, err
@@ -131,6 +145,20 @@ func openBrokerStore(dir, digest string) (*brokerStore, *brokerLedger, error) {
 	if err != nil || strictjson.Decode(data, ledger, true) != nil || !brokerLedgerValid(ledger, digest) {
 		store.close()
 		return nil, nil, errBrokerStorage
+	}
+	if ledger.LedgerIdentityDigest == "" {
+		// The exclusive lock prevents a legacy writer from racing migration.
+		// This new identity is evidence only for future controller witnesses.
+		ledger.LedgerIdentityDigest = foundry.Digest([]byte(uuid.NewString()))
+		if err := store.save(ledger); err != nil {
+			if !errors.Is(err, errBrokerCapacity) {
+				store.close()
+				return nil, nil, err
+			}
+			// A full legacy ledger must remain usable for exact-owner cleanup.
+			// It cannot advertise boot recovery without a persisted identity.
+			ledger.LedgerIdentityDigest = ""
+		}
 	}
 	return store, ledger, nil
 }

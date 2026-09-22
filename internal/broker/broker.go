@@ -161,6 +161,16 @@ func brokerEnsureSession(next *brokerLedger, c brokerContext) (*brokerSession, e
 	if session := next.Sessions[key]; session != nil {
 		return session, nil
 	}
+	bootKey := foundry.JSONDigest(c.Owner.bootFence())
+	if next.SealedBoots[bootKey] != nil {
+		return nil, errBrokerClosed
+	}
+	if next.LedgerIdentityDigest != "" {
+		boots := brokerBootOwners(next)
+		if _, exists := boots[bootKey]; !exists && brokerBootCount(next, boots) >= brokerBootLimit {
+			return nil, errBrokerCapacity
+		}
+	}
 	if len(next.Sessions) >= 4096 {
 		return nil, errBrokerStorage
 	}
@@ -238,6 +248,10 @@ func (b *lifecycleBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	values := r.Header.Values("Authorization")
 	if len(values) != 1 || subtle.ConstantTimeCompare([]byte(values[0]), []byte("Bearer "+b.cfg.bearer)) != 1 {
 		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	if r.URL.Path == brokerapi.IdentityPath || r.URL.Path == brokerapi.RetireBootPath {
+		b.serveBootRecovery(w, r)
 		return
 	}
 	validPath := r.URL.Path == brokerapi.ResponsesPath || r.URL.Path == brokerapi.RenewPath || r.URL.Path == brokerapi.SettlePath ||

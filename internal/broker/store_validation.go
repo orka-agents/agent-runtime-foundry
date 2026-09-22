@@ -20,7 +20,7 @@ func brokerLedgerValid(ledger *brokerLedger, digest string) bool {
 			return false
 		}
 	}
-	return true
+	return brokerBootSealsValid(ledger)
 }
 
 func brokerSessionValid(session *brokerSession, key, digest string) bool {

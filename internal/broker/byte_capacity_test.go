@@ -155,7 +155,7 @@ func TestBrokerByteReserveCoversEscapedAcceptanceAndCleanup(t *testing.T) {
 
 func TestBrokerByteCapacityRejectsBeforeIOAndKeepsFailureClosed(t *testing.T) {
 	b, c := newBrokerResponseIdentityFixture(t)
-	brokerCapacityFillHistory(t, b, c, brokerMaxLedgerBytes-brokerOwnerReserveBytes-512, true)
+	brokerCapacityFillHistory(t, b, c, brokerMaxLedgerBytes-brokerOwnerReserveBytes-brokerBootReserveBytes-512, true)
 	before := brokerIdentityLedgerBytes(t, b)
 	path := filepath.Join(b.store.dir, "state.json")
 	record, err := os.Open(path)
@@ -284,7 +284,7 @@ func TestBrokerByteCapacityConcurrentOwnersPreserveAcceptanceAndCleanup(t *testi
 		}
 	}
 	b.mu.Unlock()
-	if reserve != len(owners)*brokerOwnerReserveBytes {
+	if reserve != len(owners)*brokerOwnerReserveBytes+brokerBootReserveBytes {
 		t.Fatal("concurrent ownership was not fully reserved")
 	}
 	brokerCapacityFillHistory(t, b, owners[0], brokerMaxLedgerBytes-reserve-128, true)

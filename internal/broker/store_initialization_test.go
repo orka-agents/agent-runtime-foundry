@@ -11,7 +11,7 @@ func brokerStoreFixture(t *testing.T) storetest.Fixture {
 	t.Helper()
 	digest := foundry.Digest([]byte("durable-broker-fixture"))
 	c := brokerTestContext(brokerConfiguration{configDigest: digest})
-	ledger := &brokerLedger{Version: 1, ConfigDigest: digest, Sessions: map[string]*brokerSession{
+	ledger := &brokerLedger{Version: 1, ConfigDigest: digest, LedgerIdentityDigest: foundry.Digest([]byte("durable-broker-identity")), Sessions: map[string]*brokerSession{
 		foundry.JSONDigest(c.Owner): {Owner: c.Owner, CreateState: "none", Retiring: true, Retired: true,
 			ProofDigest: foundry.Digest([]byte("retired-owner")), Prompts: map[string]*brokerPrompt{},
 			Responses: map[string]brokerResponseID{}, Operations: map[string]string{}},

@@ -253,10 +253,39 @@ inference request has an unresolved acceptance outcome. Those cases remain
 blocked and Orka reports `OutcomeUnknown` without replaying the prompt.
 
 Lease expiry and broker startup trigger cleanup of exactly owned sessions.
-Kubernetes container-termination recovery does not apply to Foundry because
+Kubernetes container termination alone cannot prove Foundry cleanup because
 remote execution can survive the local container. Preserve unresolved
-ownership records for investigation; do not fabricate retirement receipts
-or remove finalizers to bypass them.
+ownership records; do not fabricate retirement receipts or remove finalizers
+to bypass them.
+
+The broker supports recovery through a replacement Orka supervisor with
+authenticated `GET /internal/v1/identity` and `POST /internal/v1/retire-boot`
+controls. Both require the lifecycle bearer. The identity response binds a
+stable `ledgerIdentityDigest` to `agentConfigurationDigest`. Orka must witness
+that identity before admission, retain it with the original boot fence, and
+prove termination of the original supervisor before requesting recovery.
+A fresh or replaced ledger cannot satisfy that witness.
+
+Boot retirement accepts the protocol, witnessed ledger and configuration
+digests, exact pool-wide `retiredFence`, and `operationID` in a strict JSON
+body. It durably seals the boot before cancelling work or contacting Foundry.
+The seal covers every matching owner, including renewal-only owners and
+in-flight creation. Delayed admission for that boot is permanently rejected.
+The broker returns complete proof only after every owner has real retirement
+evidence and no pending creation, ambiguous request, or active invocation
+remains. An empty owner set is valid only against the witnessed ledger and
+its persisted seal. Missing history never creates an owner as recovery proof.
+
+The response binds the exact request-body digest, operation, ledger, retired
+fence, and sorted owner-set digest. Its canonical proof digest covers the
+public retirement evidence; a fresh retry operation preserves the same seal
+and completed proof. Uncertain operations remain blocked across retries and
+restarts. The broker does not replay inference.
+
+Upgrading a legacy ledger adds a fresh durable identity while preserving its
+owners. That identity supports future enrollment and does not establish a
+witness for an earlier boot. A legacy ledger already at its byte limit keeps
+exact-owner cleanup available but cannot advertise an unpersisted identity.
 
 The broker writes one bounded JSON diagnostic to stderr when a dispatched
 response fails. It records the failure stage, outer HTTP status, invocation
@@ -269,9 +298,10 @@ These diagnostics leave ownership and cleanup decisions to the existing
 durable evidence and settlement checks.
 
 An authenticated drain can replace a surviving supervisor after a controller
-epoch change. After a supervisor crash, Orka cannot import the broker's
-old-owner proof through the current harness contract. That recovery remains
-blocked even if the broker later contains the remote work.
+epoch change. Recovery after supervisor loss requires Orka's enrolled broker
+identity, exact termination witness, and authenticated boot-retirement proof.
+Without those witnesses, recovery remains blocked even if the broker later
+contains the remote work.
 
 ## Verification
 

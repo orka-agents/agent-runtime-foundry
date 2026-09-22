@@ -121,9 +121,11 @@ Loss of either channel, supervisor exit, Foundry stop/resume, or a container
 replacement closes the hosted lifetime. No automatic respawn or session
 adoption occurs. In-flight operations may have an unknown outcome. Preserve
 both ledgers and use confirmed Orka drain/retirement before replacing a
-surviving runtime. After supervisor loss, the current v2 contract cannot
-import the old broker's retirement proof; unresolved work remains
-`OutcomeUnknown`. A new session ID does not establish that old work stopped.
+surviving runtime. This hosted-supervisor deployment does not provide the
+witnessed Kubernetes container termination required by Orka's replacement
+supervisor recovery path. Remote broker retirement alone does not prove the
+hosted supervisor stopped; unresolved work remains `OutcomeUnknown`. A new
+session ID does not establish that old work stopped.
 
 The broker settles fully completed foreground Responses from their validated,
 durable completion records. It keeps the downstream session running so a

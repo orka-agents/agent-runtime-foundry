@@ -74,10 +74,7 @@ type brokerControlResponse struct {
 }
 
 func (o brokerOwner) valid() bool {
-	return foundry.SafeString(o.RuntimeInstanceID, 512) && foundry.SafeString(o.SupervisorBootID, 512) &&
-		o.ControllerEpoch > 0 && foundry.SafeString(o.RuntimePoolUID, 512) && o.RuntimePoolGeneration > 0 &&
-		foundry.SafeString(o.RuntimeSessionUID, 512) && o.RuntimeSessionGeneration > 0 &&
-		foundry.DigestValid(o.RuntimeProfileDigest) && o.ProfileDigestSchemaVersion == 1
+	return o.bootFence().validBootFence() && foundry.SafeString(o.RuntimeSessionUID, 512) && o.RuntimeSessionGeneration > 0
 }
 
 func (c brokerContext) promptKey() string {
