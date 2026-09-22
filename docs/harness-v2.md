@@ -331,7 +331,9 @@ and no model continuation, then exercise approval, decline, expiry, and a tool
 failure after approval. A gateway that strips the proof is also tested to verify that no model
 resume occurs. Cancellation cases hold the model connection open, wait for an
 early hosted response acknowledgement, and verify that disconnect and lease
-expiry close the model connection and allow proven retirement. A gateway that
+expiry close the model connection and allow proven retirement. Disconnect while
+the gateway still holds that original acknowledgement must preserve it before
+cancelling the model request. A gateway that
 loses the acknowledgement must leave the broker's ownership unresolved.
 
 To include the native Microsoft Agent Framework path without brokered tools,

@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -282,11 +283,30 @@ func (b *lifecycleBroker) invoke(ctx context.Context, c brokerContext, request f
 	if err != nil {
 		return foundry.Response{}, err
 	}
+	// Cancellation must not destroy an already issued request's first remote
+	// acknowledgement. Preserve that one bounded attempt until its identity is
+	// durable, then honor prompt cancellation immediately. No inference is
+	// replayed, and broker shutdown or storage failure still cancels the request.
+	responseCtx, cancelResponse := context.WithCancel(b.ctx)
+	ackDeadline := time.AfterFunc(b.cfg.operationTimeout, cancelResponse)
+	var stopCancellation func() bool
+	acknowledged := sync.OnceFunc(func() {
+		ackDeadline.Stop()
+		stopCancellation = context.AfterFunc(ctx, cancelResponse)
+	})
+	defer func() {
+		ackDeadline.Stop()
+		if stopCancellation != nil {
+			stopCancellation()
+		}
+		cancelResponse()
+	}()
+	prepared = prepared.WithContext(responseCtx)
 	b.mu.Lock()
 	err = b.commitLocked(func(next *brokerLedger) error {
 		session := next.Sessions[key]
 		prompt := session.Prompts[promptKey]
-		if session.Retiring || prompt.Closing || ctx.Err() != nil || !prompt.LeaseExpiresAt.After(time.Now()) {
+		if session.Retiring || prompt.Closing || ctx.Err() != nil || responseCtx.Err() != nil || !prompt.LeaseExpiresAt.After(time.Now()) {
 			return errBrokerClosed
 		}
 		prompt.Invocations[c.InvocationSequence].State = "intent"
@@ -337,7 +357,7 @@ func (b *lifecycleBroker) invoke(ctx context.Context, c brokerContext, request f
 	case "text/event-stream":
 		var data []byte
 		diagnostic.stage = "stream_read"
-		data, err = b.readTrackedStream(response.Body, c, remoteID, &diagnostic)
+		data, err = b.readTrackedStream(response.Body, c, remoteID, &diagnostic, acknowledged)
 		if err == nil {
 			diagnostic.stage = "strict_decode"
 			diagnostic.streamComplete = true
@@ -355,6 +375,7 @@ func (b *lifecycleBroker) invoke(ctx context.Context, c brokerContext, request f
 				diagnostic.stage = "response_identity"
 				err = b.recordResponseIdentity(c, document, remoteID)
 				if err == nil {
+					acknowledged()
 					diagnostic.observe(data, document)
 				}
 			}
@@ -417,7 +438,7 @@ func brokerDecodeResponseEvidence(data []byte) (foundry.Response, error) {
 	return response, nil
 }
 
-func (b *lifecycleBroker) readTrackedStream(reader io.Reader, c brokerContext, remoteID string, diagnostic *brokerResponseDiagnostic) ([]byte, error) {
+func (b *lifecycleBroker) readTrackedStream(reader io.Reader, c brokerContext, remoteID string, diagnostic *brokerResponseDiagnostic, acknowledged func()) ([]byte, error) {
 	limited := &io.LimitedReader{R: reader, N: foundry.DefaultMaxStreamBytes + 1}
 	scanner := bufio.NewScanner(limited)
 	scanner.Buffer(make([]byte, 32<<10), foundry.DefaultMaxEventBytes)
@@ -455,6 +476,9 @@ func (b *lifecycleBroker) readTrackedStream(reader io.Reader, c brokerContext, r
 		}
 		if err := b.recordResponseIdentity(c, response, remoteID); err != nil {
 			return err
+		}
+		if acknowledged != nil {
+			acknowledged()
 		}
 		diagnostic.observe(frame.Response, response)
 		return nil

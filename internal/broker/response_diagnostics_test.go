@@ -196,7 +196,7 @@ func TestBrokerResponseDiagnosticDoesNotClaimFailedIdentityWrite(t *testing.T) {
 	}
 	diagnostic := brokerResponseDiagnostic{}
 	frame := testSSE(`{"type":"response.failed","response":{"id":"provider-do-not-log","status":"failed","error":{"code":"ModelAuthRejected","message":"do-not-log","upstream_status":403}}}`)
-	_, err := b.readTrackedStream(strings.NewReader(frame), c, brokerIdentityRemoteSession, &diagnostic)
+	_, err := b.readTrackedStream(strings.NewReader(frame), c, brokerIdentityRemoteSession, &diagnostic, nil)
 	if !errors.Is(err, errBrokerStorage) || diagnostic.accepted || diagnostic.errorCode != "" || diagnostic.terminalFrames != 0 {
 		t.Fatal("diagnostics claimed acceptance after failed persistence")
 	}

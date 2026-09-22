@@ -11,11 +11,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/orka-agents/agent-runtime-foundry/internal/brokerapi"
+	"github.com/orka-agents/agent-runtime-foundry/internal/foundry"
 )
 
 // Exercise cancellation while the real hosted AgentKit is awaiting a model.
@@ -26,7 +28,7 @@ func TestBrokerAgentKitHostedCancellation(t *testing.T) {
 	if source == "" {
 		t.Skip("set AGENTKIT_SOURCE_DIR and AGENTKIT_PYTHON to test an AgentKit checkout")
 	}
-	for _, mode := range []string{"disconnect", "lease_expiry", "acknowledgement_lost", "native_disconnect"} {
+	for _, mode := range []string{"disconnect", "delayed_ack_disconnect", "lease_expiry", "acknowledgement_lost", "native_disconnect"} {
 		t.Run(mode, func(t *testing.T) {
 			native := mode == "native_disconnect"
 			if native && os.Getenv("AGENTKIT_MAF_PYTHON") == "" {
@@ -59,6 +61,9 @@ func TestBrokerAgentKitHostedCancellation(t *testing.T) {
 			cfg := brokerTestConfig(t, f)
 			cfg.agentKitProof = brokerAgentKitFixtureProof
 			acknowledgementLost := make(chan struct{})
+			acknowledgementHeld, releaseAcknowledgement := make(chan struct{}), make(chan struct{})
+			release := sync.OnceFunc(func() { close(releaseAcknowledgement) })
+			t.Cleanup(release)
 			client := &http.Client{Transport: brokerFixtureTransport(func(r *http.Request) (*http.Response, error) {
 				if !strings.HasSuffix(r.URL.Path, "/endpoint/protocols/openai/responses") {
 					return http.DefaultTransport.RoundTrip(r)
@@ -71,6 +76,16 @@ func TestBrokerAgentKitHostedCancellation(t *testing.T) {
 				request.URL, _ = url.Parse(hostedURL + "/responses")
 				request.Host = request.URL.Host
 				response, err := http.DefaultTransport.RoundTrip(request)
+				if err == nil && mode == "delayed_ack_disconnect" {
+					close(acknowledgementHeld)
+					select {
+					case <-releaseAcknowledgement:
+						return response, nil
+					case <-request.Context().Done():
+						_ = response.Body.Close()
+						return nil, request.Context().Err()
+					}
+				}
 				if err != nil || mode != "acknowledgement_lost" {
 					return response, err
 				}
@@ -124,11 +139,25 @@ func TestBrokerAgentKitHostedCancellation(t *testing.T) {
 				if brokerInvocationState(b, c) != "intent" {
 					t.Fatal("gateway-only acknowledgement was admitted as broker evidence")
 				}
+			} else if mode == "delayed_ack_disconnect" {
+				select {
+				case <-acknowledgementHeld:
+				case <-time.After(4 * time.Second):
+					t.Fatal("gateway did not hold the original acknowledgement")
+				}
 			} else {
 				brokerAwait(t, func() bool { return brokerInvocationState(b, c) == "accepted" })
 			}
 			if mode != "lease_expiry" {
 				cancel()
+			}
+			if mode == "delayed_ack_disconnect" {
+				brokerAwait(t, func() bool {
+					b.mu.Lock()
+					defer b.mu.Unlock()
+					return b.ledger.Sessions[foundry.JSONDigest(c.Owner)].Prompts[c.promptKey()].Closing
+				})
+				release()
 			}
 			if result := brokerWaitInference(t, done); result.err == nil && result.status == http.StatusOK {
 				t.Fatal("cancelled hosted inference exposed a successful terminal response")
